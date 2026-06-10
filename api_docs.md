@@ -2,7 +2,7 @@
 
 ## 概述
 
-AI题库服务是一个基于OpenAI API的问题解答服务，专为[OCS (Online Course Script)](https://github.com/ocsjs/ocsjs)设计，可以通过AI自动回答题目。此服务实现了与OCS AnswererWrapper兼容的API接口，方便用户将AI能力整合到OCS题库搜索中。
+AI题库服务是一个基于 DeepSeek API (Anthropic 兼容协议) 的问题解答服务，专为[OCS (Online Course Script)](https://github.com/ocsjs/ocsjs)设计，可以通过AI自动回答题目。此服务实现了与OCS AnswererWrapper兼容的API接口，方便用户将AI能力整合到OCS题库搜索中。
 
 ## 接口详情
 
@@ -127,10 +127,10 @@ ACCESS_TOKEN=your_secret_token_here
 
 ## 注意事项
 
-1. **多选题答案格式**: 对于多选题，OCS期望的答案格式是用`#`分隔的选项，例如`A#B#C`。本服务会自动处理这个格式，将OpenAI返回的多选答案转换为此格式。
+1. **多选题答案格式**: 对于多选题，OCS期望的答案格式是用`#`分隔的选项，例如`A#B#C`。本服务会自动处理这个格式，将AI返回的多选答案转换为此格式。
 
-2. **API请求限制**: 注意OpenAI API有使用限制和费用。确保你的账户有足够的额度来处理预期的请求量。
+2. **API请求限制**: 注意 DeepSeek API 有使用限制和费用。确保你的账户有足够的额度来处理预期的请求量。
 
-3. **网络连接**: 确保部署此服务的服务器能够访问OpenAI API（api.openai.com）。某些地区可能需要代理服务。
+3. **网络连接**: 确保部署此服务的服务器能够访问 DeepSeek API（api.deepseek.com）。某些地区可能需要代理服务。
 
 4. **题库域名**: 根据OCS文档说明，需要将题库配置中`homepage`以及`url`所涉及到的域名，在脚本头部元信息`@connect`中新增，否则无法请求到数据。

@@ -1,28 +1,36 @@
 # -*- coding: utf-8 -*-
 """
 EduBrain AI - 智能题库系统
-基于 OpenAI API 的智能题库服务，提供兼容 OCS 接口的智能答题功能
+基于 Anthropic 兼容协议的智能题库服务，支持 ccswitch 动态配置
+优先通过 ccswitch 代理调用 API，自动读取 Claude Code 的实时配置
 作者：Lynn
-版本：1.1.0
+版本：1.3.0
 """
-from flask import Flask, request, jsonify, make_response, render_template
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import os
 import time
 import logging
-import openai
-import json
+import anthropic
+from collections import deque
 from datetime import datetime
+
+# 必须在导入 config 之前配置日志，确保 ccswitch 模块的日志也能被正确捕获
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('ai_answer_service')
 
 from config import Config
 from utils import SimpleCache, format_answer_for_ocs, parse_question_and_options, extract_answer
 
-# 配置日志
-logging.basicConfig(
-    level=getattr(logging, Config.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('ai_answer_service')
+# 根据配置调整日志级别
+logging.getLogger().setLevel(getattr(logging, Config.LOG_LEVEL))
+
+# 记录配置来源
+logger.info(f"配置来源: {Config.CONFIG_SOURCE}")
+logger.info(f"AI 模型: {Config.ANTHROPIC_MODEL}, Base URL: {Config.ANTHROPIC_BASE_URL}")
 
 # 初始化应用
 app = Flask(__name__)
@@ -31,26 +39,35 @@ CORS(app)  # 启用CORS支持
 # 初始化缓存
 cache = SimpleCache(Config.CACHE_EXPIRATION) if Config.ENABLE_CACHE else None
 
-# 验证OpenAI API密钥
-if not Config.OPENAI_API_KEY:
-    logger.critical("未设置OpenAI API密钥，请在.env文件中配置OPENAI_API_KEY")
-    raise ValueError("请设置环境变量OPENAI_API_KEY")
+# 验证 Anthropic API 密钥
+if not Config.ANTHROPIC_API_KEY:
+    logger.critical("未设置 Anthropic API 密钥，请在 .env 文件中配置 ANTHROPIC_API_KEY")
+    raise ValueError("请设置环境变量 ANTHROPIC_API_KEY")
 
-# 初始化OpenAI客户端
-client = openai.OpenAI(
-    api_key=Config.OPENAI_API_KEY,
-    base_url=Config.OPENAI_API_BASE
+# 初始化 Anthropic 客户端（连接 DeepSeek API）
+client = anthropic.Anthropic(
+    api_key=Config.ANTHROPIC_API_KEY,
+    base_url=Config.ANTHROPIC_BASE_URL
 )
 
-# 问答记录存储（实际应用中可以使用数据库）
-qa_records = []
-MAX_RECORDS = 100  # 最多保存100条记录
+# 问答记录存储
+MAX_RECORDS = 100
+qa_records = deque(maxlen=MAX_RECORDS)
 start_time = time.time()
 
-def verify_access_token(request):
+# AI 系统提示词
+SYSTEM_PROMPT = (
+    "你是一个专业的考试答题助手。请直接回答答案，不要解释。"
+    "选择题只回答选项的内容(如：地球)；"
+    "多选题用#号分隔答案,只回答选项的内容(如中国#世界#地球)；"
+    "判断题只回答: 正确/对/true/√ 或 错误/错/false/×；"
+    "填空题直接给出答案。"
+)
+
+def verify_access_token(req):
     """验证访问令牌（如果配置了的话）"""
     if Config.ACCESS_TOKEN:
-        token = request.headers.get('X-Access-Token') or request.args.get('token')
+        token = req.headers.get('X-Access-Token') or req.args.get('token')
         if not token or token != Config.ACCESS_TOKEN:
             return False
     return True
@@ -58,7 +75,7 @@ def verify_access_token(request):
 @app.route('/api/search', methods=['GET', 'POST'])
 def search():
     """
-    处理OCS发送的搜索请求，使用OpenAI API生成答案
+    处理OCS发送的搜索请求，使用 DeepSeek API 生成答案
     GET请求: 从URL参数获取问题
     POST请求: 从请求体获取问题
     
@@ -118,22 +135,28 @@ def search():
                 logger.info(f"从缓存获取答案 (耗时: {time.time() - start_time:.2f}秒)")
                 return jsonify(format_answer_for_ocs(question, cached_answer))
         
-        # 构建发送给OpenAI的提示
+        # 构建发送给 AI 的提示
         prompt = parse_question_and_options(question, options, question_type)
         
-        # 调用OpenAI API
-        response = client.chat.completions.create(
-            model=Config.OPENAI_MODEL,
+        # 调用 AI API
+        response = client.messages.create(
+            model=Config.ANTHROPIC_MODEL,
             temperature=Config.TEMPERATURE,
             max_tokens=Config.MAX_TOKENS,
+            system=SYSTEM_PROMPT,
             messages=[
-                {"role": "system", "content": "你是一个专业的考试答题助手。请直接回答答案，不要解释。选择题只回答选项的内容(如：地球)；多选题用#号分隔答案,只回答选项的内容(如中国#世界#地球)；判断题只回答: 正确/对/true/√ 或 错误/错/false/×；填空题直接给出答案。"},
                 {"role": "user", "content": prompt}
             ]
         )
-        
-        # 获取AI生成的答案
-        ai_answer = response.choices[0].message.content.strip()
+
+        # 安全获取 AI 响应内容
+        if (response.content and
+                hasattr(response.content[0], 'text') and
+                response.content[0].text):
+            ai_answer = response.content[0].text.strip()
+        else:
+            logger.warning("AI 返回空响应")
+            return jsonify({'code': 0, 'msg': 'AI 未返回有效答案'})
         
         # 处理答案格式
         processed_answer = extract_answer(ai_answer, question_type)
@@ -142,7 +165,7 @@ def search():
         if Config.ENABLE_CACHE:
             cache.set(question, processed_answer, question_type, options)
         
-        # 保存问答记录
+        # 保存问答记录（deque 自动限制最大长度）
         current_time = datetime.now()
         qa_records.append({
             'time': current_time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -152,8 +175,6 @@ def search():
             'options': options,
             'answer': processed_answer
         })
-        if len(qa_records) > MAX_RECORDS:
-            qa_records.pop(0)
         
         # 记录处理时间
         process_time = time.time() - start_time
@@ -178,9 +199,10 @@ def health_check():
     return jsonify({
         'status': 'ok',
         'message': 'AI题库服务运行正常',
-        'version': '1.0.0',
+        'version': '1.3.0',
+        'config_source': Config.CONFIG_SOURCE,
         'cache_enabled': Config.ENABLE_CACHE,
-        'model': Config.OPENAI_MODEL
+        'model': Config.ANTHROPIC_MODEL
     })
 
 @app.route('/api/cache/clear', methods=['POST'])
@@ -216,11 +238,12 @@ def get_stats():
         }), 403
     
     stats = {
-        'version': '1.0.0',
+        'version': '1.3.0',
+        'config_source': Config.CONFIG_SOURCE,
         'uptime': time.time() - start_time,
-        'model': Config.OPENAI_MODEL,
+        'model': Config.ANTHROPIC_MODEL,
         'cache_enabled': Config.ENABLE_CACHE,
-        'cache_size': len(cache.cache) if Config.ENABLE_CACHE else 0,
+        'cache_size': len(cache) if Config.ENABLE_CACHE else 0,
         'qa_records_count': len(qa_records)
     }
     
@@ -237,10 +260,11 @@ def dashboard():
     
     return render_template(
         'dashboard.html',
-        version="1.1.0",
+        version="1.3.0",
+        config_source=Config.CONFIG_SOURCE,
         cache_enabled=Config.ENABLE_CACHE,
         cache_size=len(cache.cache) if Config.ENABLE_CACHE else 0,
-        model=Config.OPENAI_MODEL,
+        model=Config.ANTHROPIC_MODEL,
         uptime=uptime_str,
         records=qa_records
     )
@@ -253,7 +277,8 @@ def index():
 @app.route('/docs', methods=['GET'])
 def docs():
     """API文档页面"""
-    with open('api_docs.md', 'r', encoding='utf-8') as f:
+    doc_path = os.path.join(os.path.dirname(__file__), 'api_docs.md')
+    with open(doc_path, 'r', encoding='utf-8') as f:
         content = f.read()
     
     # 使用markdown库将文档转换为HTML（需要安装：pip install markdown）

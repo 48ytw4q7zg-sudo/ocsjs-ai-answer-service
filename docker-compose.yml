@@ -11,6 +11,11 @@ services:
       - ./logs:/app/logs
     env_file:
       - .env
+    # Docker 容器访问宿主机 ccswitch 代理（127.0.0.1:15721）
+    # 方式1：使用 host.docker.internal（Windows/Mac 自动支持）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # 方式2：如果方式1不生效，改为 network_mode: "host" 并注释掉 ports
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]

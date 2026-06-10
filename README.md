@@ -1,19 +1,22 @@
 # EduBrain AI - 智能题库系统
 
-这是一个基于Python和OpenAI API的新一代智能题库服务，专为[OCS (Online Course Script)](https://github.com/ocsjs/ocsjs)设计，可以通过AI自动回答题目。此服务实现了与OCS AnswererWrapper兼容的API接口，方便用户将AI能力整合到OCS题库搜索中。
+这是一个基于 Python 和 Anthropic 兼容协议的智能题库服务，专为[OCS (Online Course Script)](https://github.com/ocsjs/ocsjs)设计，可以通过AI自动回答题目。此服务实现了与OCS AnswererWrapper兼容的API接口，方便用户将AI能力整合到OCS题库搜索中。
+
+**支持 ccswitch 动态配置**：自动读取 Claude Code 的实时 API 代理设置，无需手动配置 API 密钥。
 
 ## ⚠️ 重要提示
 
 > [!IMPORTANT]  
 > - 本项目仅供个人学习使用，不保证稳定性，且不提供任何技术支持。
-> - 使用者必须在遵循 OpenAI 的[使用条款](https://openai.com/policies/terms-of-use)以及**法律法规**的情况下使用，不得用于非法用途。
+> - 使用者必须在遵循 DeepSeek 的[使用条款](https://platform.deepseek.com/policies)以及**法律法规**的情况下使用，不得用于非法用途。
 > - 根据[《生成式人工智能服务管理暂行办法》](http://www.cac.gov.cn/2023-07/13/c_1690898327029107.htm)的要求，请勿对中国地区公众提供一切未经备案的生成式人工智能服务。
 > - 使用者应当遵守相关法律法规，承担相应的法律责任
 > - 服务不对AI生成内容的准确性做出保证
 
 ## 功能特点
 
-- 💡 **AI驱动**：使用OpenAI API生成智能回答
+- 💡 **AI驱动**：通过 ccswitch 代理或直接 API 调用生成智能回答
+- 🔌 **ccswitch 集成**：自动读取 `~/.claude/settings.json`，无需手动配置密钥
 - 🔄 **OCS兼容**：完全兼容OCS的AnswererWrapper题库接口
 - 🚀 **高性能**：内存缓存优化，快速响应请求
 - 🔒 **安全可靠**：支持访问令牌验证，保护API调用
@@ -25,7 +28,8 @@
 ## 系统要求
 
 - Python 3.7+
-- OpenAI API密钥（需要单独申请）
+- [ccswitch](https://github.com/ccswitch/ccswitch)（推荐，自动管理 API 密钥和模型配置）
+- 或手动配置：DeepSeek / Anthropic 兼容 API 密钥
 
 ## 快速开始
 
@@ -42,18 +46,32 @@ cd ocsjs-ai-answer-service
 pip install -r requirements.txt
 ```
 
-### 3. 配置环境变量
+### 3. 配置
 
-将`.env.example`复制为`.env`并填写必要的配置信息：
+**方式一（推荐）：使用 ccswitch**
+
+如果已安装并运行 ccswitch，服务会自动读取 `~/.claude/settings.json` 中的代理配置，无需手动配置 `.env` 文件。直接启动即可：
+
+```bash
+python app.py
+```
+
+启动日志会显示 `配置来源: ccswitch`。
+
+**方式二：手动配置 .env**
+
+将 `.env.example` 复制为 `.env` 并填写配置：
 
 ```bash
 cp .env.example .env
 ```
 
-编辑`.env`文件，至少需要填写OpenAI API密钥：
+编辑 `.env` 文件，填写 API 密钥：
 
 ```
-OPENAI_API_KEY=your_api_key_here
+ANTHROPIC_API_KEY=your_api_key_here
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_MODEL=deepseek-v4-pro
 ```
 
 ### 4. 启动服务
@@ -237,13 +255,13 @@ AI生成的答案可能存在以下情况：
 
 ### 2. 多选题答案格式
 
-对于多选题，OCS期望的答案格式是用`#`分隔的选项，例如`A#B#C`。本服务已经处理了这个格式，会自动将OpenAI返回的多选答案转换为此格式。
+对于多选题，OCS期望的答案格式是用`#`分隔的选项，例如`A#B#C`。本服务已经处理了这个格式，会自动将AI返回的多选答案转换为此格式。
 
 ### 2. API请求限制
 
-注意OpenAI API有使用限制和费用。确保你的账户有足够的额度来处理预期的请求量。
+注意 DeepSeek API 有使用限制和费用。确保你的账户有足够的额度来处理预期的请求量。
 
 ### 3. 网络连接问题
 
-确保部署此服务的服务器能够访问OpenAI API（api.openai.com）。某些地区可能需要代理服务。
+确保部署此服务的服务器能够访问 DeepSeek API（api.deepseek.com）。某些地区可能需要代理服务。
 

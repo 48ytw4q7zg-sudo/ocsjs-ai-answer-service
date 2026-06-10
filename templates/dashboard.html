@@ -35,6 +35,7 @@
                     </div>
                     <div class="card-body">
                         <p><strong>版本：</strong>{{ version }}</p>
+                        <p><strong>配置来源：</strong>{{ config_source }}</p>
                         <p><strong>缓存状态：</strong>{{ "已启用" if cache_enabled else "未启用" }}</p>
                         <p><strong>缓存数量：</strong>{{ cache_size }}条</p>
                         <p><strong>使用模型：</strong>{{ model }}</p>
@@ -101,7 +102,7 @@
     <footer class="footer mt-5 py-3 bg-light">
         <div class="container text-center">
             <p>EduBrain AI - 智能题库系统 v{{ version }}</p>
-            <p>Powered by OpenAI API | 作者：LynnGuo666</p>
+            <p>Powered by DeepSeek API | 作者：LynnGuo666</p>
             <p><small>© 2024-2025 All Rights Reserved</small></p>
         </div>
     </footer>
