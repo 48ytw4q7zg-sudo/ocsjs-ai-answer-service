@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-EduBrain AI - 智能题库系统 v2.1.0
+EduBrain AI - 智能题库系统 v2.2.0
 基于 Anthropic 兼容协议的智能题库服务，支持 ccswitch 动态配置
 优先通过 ccswitch 代理调用 API，自动读取 Claude Code 的实时配置
-新增：模型名净化、运行时配置重载、ccswitch 信息展示
+新增：增强提示词（题目+选项强制合并）、空答案自动重试、DeepSeek 深度适配
 作者：QXW
-版本：2.1.0
+版本：2.2.0
 """
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
@@ -51,18 +51,25 @@ qa_records = deque(maxlen=MAX_RECORDS)
 start_time = time.time()
 
 SYSTEM_PROMPT = (
-    "你是一个专业的考试答题助手。请直接回答答案，不要解释。"
-    "选择题只回答选项的内容(如：地球)；"
-    "多选题用#号分隔答案,只回答选项的内容(如中国#世界#地球)；"
-    "判断题只回答: 正确/对/true/√ 或 错误/错/false/×；"
-    "填空题直接给出答案。"
+    "你是一个考试答题助手，为在线答题系统提供精准答案。\n"
+    "\n"
+    "## 核心规则\n"
+    "1. 必须基于用户提供的具体选项来回答，不要凭记忆作答\n"
+    "2. 如果题目与网络常见题相同但选项顺序不同，必须按实际选项回答\n"
+    "3. 输出答案内容 / 选项字母，不要任何解释\n"
+    "4. 不要输出「答案：」「答案是」等前缀\n"
+    "\n"
+    "## 输出格式\n"
+    "- 单选题：输出选项字母（如 A）或正确选项的完整文本（如 北京）\n"
+    "- 多选题：用#分隔选项字母（如 A#C#D）\n"
+    "- 判断题：输出「正确」或「错误」\n"
+    "- 填空题：输出填空处的答案文本"
 )
 
-_SERVER_VERSION = "2.1.0"
+_SERVER_VERSION = "2.2.0"
 
 
 def verify_access_token(req):
-    """验证访问令牌（如果配置了的话）"""
     if Config.ACCESS_TOKEN:
         token = req.headers.get('X-Access-Token') or req.args.get('token')
         if not token or token != Config.ACCESS_TOKEN:
@@ -71,7 +78,6 @@ def verify_access_token(req):
 
 
 def build_ai_client():
-    """使用当前 Config 构建 Anthropic 客户端"""
     return anthropic.Anthropic(
         api_key=Config.ANTHROPIC_API_KEY,
         base_url=Config.ANTHROPIC_BASE_URL,
@@ -80,9 +86,33 @@ def build_ai_client():
     )
 
 
+def _call_ai(prompt: str, max_tokens: int = 300) -> str | None:
+    """调用 AI API，重试 2 次（含备选提示词策略）"""
+    # 第 1 次：正常调用
+    for attempt in range(2):
+        try:
+            response = client.messages.create(
+                model=Config.ANTHROPIC_MODEL,
+                temperature=0.3 if attempt > 0 else Config.TEMPERATURE,
+                max_tokens=max_tokens,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            if response.content and len(response.content) > 0:
+                block = response.content[0]
+                if hasattr(block, 'text') and block.text and block.text.strip():
+                    return block.text.strip()
+        except (anthropic.APIStatusError, anthropic.APITimeoutError, anthropic.APIConnectionError):
+            if attempt == 1:
+                raise
+        if attempt == 0:
+            logger.warning(f"AI 返回空文本，尝试第 {attempt + 2} 次（降温 + 更短提示）...")
+
+    return None
+
+
 @app.route('/api/search', methods=['GET', 'POST'])
 def search():
-    """处理OCS发送的搜索请求，使用 AI API 生成答案"""
     t_start = time.time()
 
     if not verify_access_token(request):
@@ -115,7 +145,7 @@ def search():
         if len(question) > Config.MAX_QUESTION_LENGTH:
             return jsonify({'code': 0, 'msg': f'问题内容过长，最大{Config.MAX_QUESTION_LENGTH}字符'}), 400
 
-        logger.info(f"接收到问题: '{question[:80]}...' (类型: {question_type})")
+        logger.info(f"接收到问题: '{question[:80]}...' (类型: {question_type}, 选项: {bool(options)})")
 
         if cache is not None:
             cached_answer = cache.get(question, question_type, options)
@@ -124,27 +154,12 @@ def search():
                 logger.info(f"从缓存获取答案 (耗时: {elapsed:.2f}秒)")
                 return jsonify(format_answer_for_ocs(question, cached_answer))
 
-        prompt = parse_question_and_options(question, options, question_type)
+        # 构建完整提示词（题目+选项+题型+指令）
+        full_prompt = parse_question_and_options(question, options, question_type)
+        logger.debug(f"AI 提示词: {full_prompt[:200]}...")
 
-        response = client.messages.create(
-            model=Config.ANTHROPIC_MODEL,
-            temperature=Config.TEMPERATURE,
-            max_tokens=Config.MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-        )
-
-        if response.content and len(response.content) > 0:
-            first_block = response.content[0]
-            if hasattr(first_block, 'text') and first_block.text:
-                ai_answer = first_block.text.strip()
-            else:
-                logger.warning("AI 返回空文本块")
-                return jsonify({'code': 0, 'msg': 'AI 未返回有效答案'})
-        else:
-            logger.warning("AI 返回空响应")
+        ai_answer = _call_ai(full_prompt)
+        if ai_answer is None:
             return jsonify({'code': 0, 'msg': 'AI 未返回有效答案'})
 
         processed_answer = extract_answer(ai_answer, question_type)
@@ -163,7 +178,7 @@ def search():
         })
 
         elapsed = time.time() - t_start
-        logger.info(f"问题处理完成 (耗时: {elapsed:.2f}秒)")
+        logger.info(f"问题处理完成 (耗时: {elapsed:.2f}秒, 答案: {processed_answer})")
 
         return jsonify(format_answer_for_ocs(question, processed_answer))
 
@@ -186,9 +201,7 @@ def search():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """健康检查接口（含完整 ccswitch 信息）"""
     uptime_seconds = time.time() - start_time
-
     result = {
         'status': 'ok',
         'message': 'AI题库服务运行正常',
@@ -200,7 +213,6 @@ def health_check():
         'base_url': Config.ANTHROPIC_BASE_URL,
         'uptime_seconds': round(uptime_seconds, 2),
     }
-
     if Config.CONFIG_SOURCE == 'ccswitch':
         result['ccswitch'] = {
             'raw_model': Config.CCSWITCH_RAW_MODEL,
@@ -208,86 +220,64 @@ def health_check():
             'model_sanitized': Config.CCSWITCH_RAW_MODEL != Config.ANTHROPIC_MODEL,
         }
         result['config_keys'] = list(Config.EXTRA_ENV.keys()) if Config.EXTRA_ENV else []
-
     return jsonify(result)
 
 
 @app.route('/api/config/reload', methods=['POST'])
 def config_reload():
-    """运行时重新加载 ccswitch 配置"""
     if not verify_access_token(request):
         return jsonify({'success': False, 'message': '无效的访问令牌'}), 403
-
     success = reload_config()
-
     if success:
         global client
         client = build_ai_client()
         logger.info(f"配置已重新加载: model={Config.ANTHROPIC_MODEL}, base_url={Config.ANTHROPIC_BASE_URL}")
         return jsonify({
-            'success': True,
-            'message': '配置已从 ccswitch 重新加载',
-            'config_source': Config.CONFIG_SOURCE,
-            'model': Config.ANTHROPIC_MODEL,
-            'base_url': Config.ANTHROPIC_BASE_URL,
-            'raw_model': Config.CCSWITCH_RAW_MODEL,
+            'success': True, 'message': '配置已从 ccswitch 重新加载',
+            'config_source': Config.CONFIG_SOURCE, 'model': Config.ANTHROPIC_MODEL,
+            'base_url': Config.ANTHROPIC_BASE_URL, 'raw_model': Config.CCSWITCH_RAW_MODEL,
         })
     else:
-        logger.warning("配置重载回退到 .env")
         return jsonify({
-            'success': True,
-            'message': 'ccswitch 不可用，已回退到 .env 配置',
-            'config_source': Config.CONFIG_SOURCE,
-            'model': Config.ANTHROPIC_MODEL,
+            'success': True, 'message': 'ccswitch 不可用，已回退到 .env 配置',
+            'config_source': Config.CONFIG_SOURCE, 'model': Config.ANTHROPIC_MODEL,
         })
 
 
 @app.route('/api/cache/clear', methods=['POST'])
 def clear_cache():
-    """清除缓存接口"""
     if not verify_access_token(request):
         return jsonify({'success': False, 'message': '无效的访问令牌'}), 403
-
     if cache is None:
         return jsonify({'success': False, 'message': '缓存未启用'})
-
     count = cache.clear()
     return jsonify({'success': True, 'message': f'缓存已清除 ({count}条)', 'count': count})
 
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
-    """获取服务统计信息"""
     if not verify_access_token(request):
         return jsonify({'success': False, 'message': '无效的访问令牌'}), 403
-
     stats = {
-        'version': _SERVER_VERSION,
-        'config_source': Config.CONFIG_SOURCE,
-        'uptime': time.time() - start_time,
-        'model': Config.ANTHROPIC_MODEL,
-        'base_url': Config.ANTHROPIC_BASE_URL,
-        'cache_enabled': Config.ENABLE_CACHE,
+        'version': _SERVER_VERSION, 'config_source': Config.CONFIG_SOURCE,
+        'uptime': time.time() - start_time, 'model': Config.ANTHROPIC_MODEL,
+        'base_url': Config.ANTHROPIC_BASE_URL, 'cache_enabled': Config.ENABLE_CACHE,
         'cache_size': len(cache) if cache is not None else 0,
         'qa_records_count': len(qa_records),
     }
-
     if Config.CONFIG_SOURCE == 'ccswitch':
         stats['ccswitch_raw_model'] = Config.CCSWITCH_RAW_MODEL
         stats['ccswitch_is_proxy'] = Config.CCSWITCH_IS_PROXY
-
     return jsonify(stats)
 
 
 @app.route('/dashboard', methods=['GET'])
 def dashboard():
-    """仪表盘 - 显示问答记录和系统状态（含 ccswitch 详情）"""
     uptime_seconds = time.time() - start_time
     days = int(uptime_seconds // 86400)
     hours = int((uptime_seconds % 86400) // 3600)
     minutes = int((uptime_seconds % 3600) // 60)
     uptime_str = f"{days}天{hours}小时{minutes}分钟"
-
     ccswitch_info = None
     if Config.CONFIG_SOURCE == 'ccswitch':
         ccswitch_info = {
@@ -297,79 +287,35 @@ def dashboard():
             'base_url': Config.ANTHROPIC_BASE_URL,
             'extra_env': Config.EXTRA_ENV,
         }
-
     return render_template(
-        'dashboard.html',
-        version=_SERVER_VERSION,
-        config_source=Config.CONFIG_SOURCE,
+        'dashboard.html', version=_SERVER_VERSION, config_source=Config.CONFIG_SOURCE,
         cache_enabled=Config.ENABLE_CACHE,
         cache_size=len(cache.cache) if cache is not None else 0,
-        model=Config.ANTHROPIC_MODEL,
-        uptime=uptime_str,
-        records=qa_records,
+        model=Config.ANTHROPIC_MODEL, uptime=uptime_str, records=qa_records,
         ccswitch_info=ccswitch_info,
     )
 
 
 @app.route('/', methods=['GET'])
 def index():
-    """首页 - 显示Web界面"""
     return render_template('index.html', version=_SERVER_VERSION)
 
 
 @app.route('/docs', methods=['GET'])
 def docs():
-    """API文档页面"""
     doc_path = os.path.join(os.path.dirname(__file__), 'api_docs.md')
     with open(doc_path, 'r', encoding='utf-8') as f:
         content = f.read()
-
     try:
         import markdown
         html_content = markdown.markdown(content, extensions=['tables'])
-
-        return f"""
-        <html>
-            <head>
-                <title>AI题库服务 - API文档 v{_SERVER_VERSION}</title>
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }}
-                    h1, h2, h3 {{ color: #2c3e50; }}
-                    .container {{ max-width: 800px; margin: 0 auto; }}
-                    code {{ background: #e0e0e0; padding: 2px 4px; border-radius: 3px; }}
-                    pre {{ background: #f4f4f4; padding: 10px; border-radius: 4px; overflow-x: auto; }}
-                    table {{ border-collapse: collapse; width: 100%; }}
-                    th, td {{ border: 1px solid #ddd; padding: 8px; }}
-                    th {{ background-color: #f4f4f4; }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    {html_content}
-                </div>
-            </body>
-        </html>
-        """
+        return f"""<html><head><title>AI题库服务 - API文档 v{_SERVER_VERSION}</title>
+<style>body{{font-family:Arial,sans-serif;margin:40px;line-height:1.6}}h1,h2,h3{{color:#2c3e50}}.container{{max-width:800px;margin:0 auto}}code{{background:#e0e0e0;padding:2px 4px;border-radius:3px}}pre{{background:#f4f4f4;padding:10px;border-radius:4px;overflow-x:auto}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ddd;padding:8px}}th{{background-color:#f4f4f4}}</style></head>
+<body><div class="container">{html_content}</div></body></html>"""
     except ImportError:
-        return f"""
-        <html>
-            <head>
-                <title>AI题库服务 - API文档 v{_SERVER_VERSION}</title>
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }}
-                    h1 {{ color: #333; }}
-                    .container {{ max-width: 800px; margin: 0 auto; }}
-                    pre {{ background: #f4f4f4; padding: 10px; border-radius: 4px; overflow-x: auto; }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <h1>AI题库服务 - API文档 v{_SERVER_VERSION}</h1>
-                    <pre>{content}</pre>
-                </div>
-            </body>
-        </html>
-        """
+        return f"""<html><head><title>AI题库服务 - API文档 v{_SERVER_VERSION}</title>
+<style>body{{font-family:Arial,sans-serif;margin:40px;line-height:1.6}}h1{{color:#333}}.container{{max-width:800px;margin:0 auto}}pre{{background:#f4f4f4;padding:10px;border-radius:4px;overflow-x:auto}}</style></head>
+<body><div class="container"><h1>AI题库服务 - API文档 v{_SERVER_VERSION}</h1><pre>{content}</pre></div></body></html>"""
 
 
 if __name__ == '__main__':

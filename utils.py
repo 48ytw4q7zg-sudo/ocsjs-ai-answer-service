@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-工具函数模块
-包含缓存管理、答案处理和提示词构建等辅助功能
+工具函数模块 v2.2.0
+缓存管理、增强提示词构建、全题型答案后处理
 """
 from __future__ import annotations
 
@@ -39,7 +39,6 @@ class SimpleCache:
                 return None
             ts, value = entry
             if time.time() - ts < self.expiration:
-                # LRU: 更新时间戳到最新（适用于频繁访问的缓存项）
                 self.cache[key] = (time.time(), value)
                 return value
             del self.cache[key]
@@ -69,60 +68,146 @@ class SimpleCache:
             return len(expired)
 
     def _evict_one(self) -> None:
-        """LRU 淘汰：删除时间戳最小的条目（最长时间未访问）"""
         oldest = min(self.cache, key=lambda k: self.cache[k][0])
         del self.cache[oldest]
 
 
 def format_answer_for_ocs(question: str, answer: str) -> Dict[str, Any]:
-    """格式化答案为 OCS 协议格式"""
     return {'code': 1, 'question': question, 'answer': answer}
-
-
-_TYPE_HINTS = {
-    "single":     "这是一道单选题。",
-    "multiple":   "这是一道多选题，答案请用#号分隔选项。",
-    "judgement":  "这是一道判断题，需要回答：正确/对/true/√ 或者 错误/错/false/×。",
-    "completion": "这是一道填空题。",
-}
 
 
 def parse_question_and_options(question: str, options: str,
                                question_type: str) -> str:
-    """解析问题和选项，构建发送给 AI 的提示词"""
-    parts = [f"问题: {question}"]
-    hint = _TYPE_HINTS.get(question_type)
-    if hint:
-        parts.append(hint)
+    """构建完整 AI 提示词：题型标签 + 题干 + 选项 + 严格指令。
+
+    核心设计原则：
+    - 题目和选项始终一起发送，不让 AI 凭记忆作答
+    - 明确告知 AI 选项顺序可能被打乱，必须仔细比对
+    - 限定输出格式，减少 AI 额外描述
+    """
+    parts = []
+
+    # 题型标签
+    type_label = {
+        "single": "【单选题】", "multiple": "【多选题】",
+        "judgement": "【判断题】", "completion": "【填空题】",
+    }.get(question_type, "【题目】")
+
+    parts.append(f"{type_label}{question}")
+
+    # 选项 → 核心上下文，必须完整发送
     if options:
-        parts.append(f"选项:\n{options}")
-    parts.append("请直接给出答案，不要解释。")
-    return "\n".join(parts)
+        if question_type == "single":
+            parts.append(f"选项:\n{options}")
+        elif question_type == "multiple":
+            parts.append(f"选项（多选）:\n{options}")
+        else:
+            parts.append(f"选项:\n{options}")
+
+    # 严格指令
+    instructions = _build_instructions(question_type, bool(options))
+    parts.append(instructions)
+
+    return "\n\n".join(parts)
+
+
+def _build_instructions(question_type: str, has_options: bool) -> str:
+    """根据题型和是否有选项，生成精确的输出指令。"""
+    if question_type == "single" and has_options:
+        return (
+            "请仔细阅读每个选项的内容，判断哪个选项正确。\n"
+            "注意：同一道题的选项顺序可能在不同试卷中被打乱，不要凭记忆选字母。\n"
+            "只输出正确选项的完整文本内容（不是字母），如「北京」而不是「B」。\n"
+            "不要输出任何解释、分析或额外文字。"
+        )
+    elif question_type == "single" and not has_options:
+        return (
+            "这是一道无选项单选题，请直接回答正确答案。\n"
+            "只输出答案本身，不要解释。"
+        )
+    elif question_type == "multiple" and has_options:
+        return (
+            "请仔细阅读每个选项，选出所有正确的选项。\n"
+            "用 # 号分隔每个正确选项的完整文本内容（不是字母），如「北京#上海#广州」。\n"
+            "不要输出任何解释、分析或额外文字。"
+        )
+    elif question_type == "multiple" and not has_options:
+        return "这是一道无选项多选题。请用 # 号分隔每个答案。只输出答案，不要解释。"
+    elif question_type == "judgement":
+        return "只输出两个字：「正确」或「错误」。不要输出任何其他内容。"
+    elif question_type == "completion":
+        return "只输出填空处的答案文本。不要输出题目、不要解释。"
+    else:
+        return "只输出最终答案，不要解释、不要分析。"
 
 
 _OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 _OPTION_SET = frozenset(_OPTION_LETTERS)
 
+# 常见前缀后缀，AI 有时会加但应该去除
+_ANSWER_PREFIX_RE = re.compile(
+    r'^(答案[是为：:]\s*|答[：:]\s*|正确答[案案][：:]\s*|正确[选项是]*[：:]\s*'
+    r'|Answer[：:]\s*|The\s+answer\s+is\s*)+',
+    re.IGNORECASE
+)
+_ANSWER_SUFFIX_RE = re.compile(r'[。！!；;，,]$')
+
 
 def extract_answer(ai_response: str, question_type: str) -> str:
-    """从 AI 响应中提取并格式化答案（多选题做 # 分隔转换）"""
-    if question_type != "multiple":
-        return ai_response
+    """从 AI 响应中提取并清洗答案。
 
+    自动去除常见前缀（答案：/答案是/Answer: 等）和后缀标点。
+    多选题额外做 # 分隔标准化。
+    """
     text = ai_response.strip()
     if not text:
         return text
 
-    # 已包含 # 分隔符
+    # 去前缀
+    cleaned = _ANSWER_PREFIX_RE.sub('', text).strip()
+    if not cleaned:
+        # 如果去前缀后为空，回退到原文
+        cleaned = text
+
+    # 去尾部标点
+    cleaned = _ANSWER_SUFFIX_RE.sub('', cleaned)
+
+    if question_type == "multiple":
+        return _process_multiple_answer(cleaned)
+    elif question_type == "judgement":
+        return _process_judgement_answer(cleaned)
+
+    return cleaned
+
+
+def _process_multiple_answer(text: str) -> str:
+    """多选答案处理：检测字母/内容格式并统一为 # 分隔"""
     if '#' in text:
         return _normalize_hash_separated(text)
+    result = _detect_letters(text)
+    if result:
+        return result
+    # 尝试按逗号/空格分隔
+    parts = re.split(r'[,，\s、]+', text)
+    parts = [p.strip() for p in parts if p.strip()]
+    if len(parts) >= 2:
+        return '#'.join(parts)
+    return text
 
-    # 尝试从文本中提取选项字母
-    return _detect_letters(text) or text
+
+def _process_judgement_answer(text: str) -> str:
+    """判断答案标准化：统一为「正确」或「错误」"""
+    positive = {'正确', '对', 'true', '√', 'yes', '是', 'right', 't', 'v'}
+    negative = {'错误', '错', 'false', '×', 'no', '否', 'wrong', 'f', 'x'}
+    lower = text.lower().strip()
+    if lower in positive:
+        return '正确'
+    if lower in negative:
+        return '错误'
+    return text
 
 
 def _normalize_hash_separated(text: str) -> str:
-    """标准化 # 分隔的答案，确保只保留选项字母"""
     parts = [p.strip() for p in text.split('#') if p.strip()]
     letters = []
     for p in parts:
@@ -132,26 +217,22 @@ def _normalize_hash_separated(text: str) -> str:
         if len(upper) == 1 and upper in _OPTION_SET:
             letters.append(upper)
         else:
-            # 尝试从长文本中提取首字母
             first = upper[0]
             if first in _OPTION_SET:
                 letters.append(first)
+            else:
+                letters.append(p)
     return '#'.join(letters) if letters else text
 
 
 def _detect_letters(text: str) -> Optional[str]:
-    """从文本中检测选项字母并返回 # 分隔格式"""
     upper = text.upper().strip()
     if not upper:
         return None
-
-    # 模式 1: 连续字母如 "ABC"
     clean = upper.replace(' ', '').replace(',', '').replace('，', '')
     m = re.match(r'^([A-H]+)$', clean)
     if m:
         return '#'.join(m.group(1))
-
-    # 模式 2: 逐行扫描，找纯字母行
     for line in text.split('\n'):
         line_clean = line.strip().rstrip(',.;，。；')
         if not line_clean or len(line_clean) > 8:
@@ -159,11 +240,8 @@ def _detect_letters(text: str) -> Optional[str]:
         letters_only = line_clean.replace(',', '').replace(' ', '').replace('，', '').upper()
         if letters_only and all(c in _OPTION_SET for c in letters_only):
             return '#'.join(letters_only)
-
-    # 模式 3: 提取所有出现的选项字母，去重并按 A-H 顺序排列
     found = sorted(set(c for c in upper if c in _OPTION_SET),
                    key=lambda c: _OPTION_LETTERS.index(c))
     if len(found) >= 2:
         return '#'.join(found)
-
     return None
