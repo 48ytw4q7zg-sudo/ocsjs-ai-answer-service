@@ -3,7 +3,7 @@
 基于 Anthropic 兼容协议的智能题库服务，专为 [OCS (Online Course Script)](https://github.com/ocsjs/ocsjs) 设计，通过 AI 自动回答题目。实现与 OCS AnswererWrapper 兼容的 API 接口，集成 ccswitch 动态配置，无需手动管理 API 密钥。
 
 **版本**: 1.3.0
-**作者**: Lynn
+**作者**: QXW
 
 ---
 
