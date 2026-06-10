@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ccswitch 配置读取模块 v2.1.0
+ccswitch 配置读取模块 v2026.6.10.1739
 从 Claude Code settings.json 中读取当前 API 设置，
 支持 ccswitch 本地代理和直连 API 两种模式。
 新增：模型名净化（去除 [1M] 等后缀）、完整 env 提取、运行时重新加载。

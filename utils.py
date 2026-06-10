@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-工具函数模块 v2.2.0
+工具函数模块 v2026.6.10.1739
 缓存管理、增强提示词构建、全题型答案后处理
 """
 from __future__ import annotations
@@ -80,10 +80,10 @@ def parse_question_and_options(question: str, options: str,
                                question_type: str) -> str:
     """构建完整 AI 提示词：题型标签 + 题干 + 选项 + 严格指令。
 
-    核心设计原则：
-    - 题目和选项始终一起发送，不让 AI 凭记忆作答
-    - 明确告知 AI 选项顺序可能被打乱，必须仔细比对
-    - 限定输出格式，减少 AI 额外描述
+    v2026.6.10.1739 增强：
+    - 指令前加「联网搜索」暗示，让 AI 更认真对待
+    - 强调选项顺序可能不同，必须逐项比对
+    - 填空题缺少选项时不再追加空选项段
     """
     parts = []
 
@@ -95,12 +95,14 @@ def parse_question_and_options(question: str, options: str,
 
     parts.append(f"{type_label}{question}")
 
-    # 选项 → 核心上下文，必须完整发送
+    # 选项核心上下文
     if options:
         if question_type == "single":
             parts.append(f"选项:\n{options}")
         elif question_type == "multiple":
-            parts.append(f"选项（多选）:\n{options}")
+            parts.append(f"选项（可多选）:\n{options}")
+        elif question_type == "judgement":
+            parts.append(f"选项:\n{options}")
         else:
             parts.append(f"选项:\n{options}")
 
@@ -115,67 +117,72 @@ def _build_instructions(question_type: str, has_options: bool) -> str:
     """根据题型和是否有选项，生成精确的输出指令。"""
     if question_type == "single" and has_options:
         return (
-            "请仔细阅读每个选项的内容，判断哪个选项正确。\n"
-            "注意：同一道题的选项顺序可能在不同试卷中被打乱，不要凭记忆选字母。\n"
-            "只输出正确选项的完整文本内容（不是字母），如「北京」而不是「B」。\n"
-            "不要输出任何解释、分析或额外文字。"
+            "请逐一分析每个选项的内容，判断哪个是正确的。\n"
+            "警示：即使这道题你在网上见过，当前试卷的选项顺序可能不同、\n"
+            "选项内容可能有微调（如'选择正确的'vs'选择错误的'）。\n"
+            "必须以当前提供的选项为准，仔细比对后选择。\n"
+            "只输出正确选项的完整文本内容（不是选项字母），如「北京」。"
         )
     elif question_type == "single" and not has_options:
-        return (
-            "这是一道无选项单选题，请直接回答正确答案。\n"
-            "只输出答案本身，不要解释。"
-        )
+        return "请直接回答正确答案。只输出答案本身。"
     elif question_type == "multiple" and has_options:
         return (
-            "请仔细阅读每个选项，选出所有正确的选项。\n"
-            "用 # 号分隔每个正确选项的完整文本内容（不是字母），如「北京#上海#广州」。\n"
-            "不要输出任何解释、分析或额外文字。"
+            "请逐一分析每个选项，选出所有正确的。\n"
+            "警示：选项顺序可能被打乱，必须以当前选项内容为准。\n"
+            "用 # 号分隔每个正确选项的完整文本（不是字母），如「北京#上海#广州」。"
         )
     elif question_type == "multiple" and not has_options:
-        return "这是一道无选项多选题。请用 # 号分隔每个答案。只输出答案，不要解释。"
+        return "请用 # 号分隔每个答案。只输出答案。"
     elif question_type == "judgement":
-        return "只输出两个字：「正确」或「错误」。不要输出任何其他内容。"
+        return (
+            "请根据题目描述判断正误。\n"
+            "只输出两个字：「正确」或「错误」。"
+        )
     elif question_type == "completion":
-        return "只输出填空处的答案文本。不要输出题目、不要解释。"
-    else:
-        return "只输出最终答案，不要解释、不要分析。"
+        return "只输出填空处的答案文本，不要输出题目。"
+    elif question_type == "single" and has_options:
+        return (
+            "请逐一分析每个选项的内容，判断哪个是正确的。\n"
+            "警示：即使这道题你在网上见过，当前试卷的选项顺序可能不同、\n"
+            '选项内容可能有微调（如"选择正确的"vs"选择错误的"）。\n'
+            "必须以当前提供的选项为准，仔细比对后选择。\n"
+            "只输出正确选项的完整文本内容（不是选项字母），如「北京」。"
+        )
 
 
 _OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 _OPTION_SET = frozenset(_OPTION_LETTERS)
 
-# 常见前缀后缀，AI 有时会加但应该去除
 _ANSWER_PREFIX_RE = re.compile(
     r'^(答案[是为：:]\s*|答[：:]\s*|正确答[案案][：:]\s*|正确[选项是]*[：:]\s*'
     r'|Answer[：:]\s*|The\s+answer\s+is\s*)+',
     re.IGNORECASE
 )
 _ANSWER_SUFFIX_RE = re.compile(r'[。！!；;，,]$')
-_OPTION_LETTER_PREFIX_RE = re.compile(r'^([A-Ha-h][.、．]\s*)')
+_OPTION_LETTER_PREFIX_RE = re.compile(r'^[A-Ha-h][.、．)]?\s*')
 
 
 def _strip_option_letter_prefix(text: str) -> str:
-    """去除选项字母前缀，如 'B. 北京' → '北京'"""
+    """去除选项字母前缀，如 'B. 北京' -> '北京'"""
     return _OPTION_LETTER_PREFIX_RE.sub('', text).strip()
 
 
 def extract_answer(ai_response: str, question_type: str) -> str:
     """从 AI 响应中提取并清洗答案。
 
-    自动去除常见前缀（答案：/答案是/Answer: 等）和后缀标点。
-    多选题额外做 # 分隔标准化。
+    流程：去前缀 -> 去尾标点 -> 按题型处理
+    - 多选： # 分隔标准化 + 字母检测
+    - 判断：中英文统一为「正确」「错误」
+    - 单选：去除选项字母前缀
     """
     text = ai_response.strip()
     if not text:
         return text
 
-    # 去前缀
     cleaned = _ANSWER_PREFIX_RE.sub('', text).strip()
     if not cleaned:
-        # 如果去前缀后为空，回退到原文
         cleaned = text
 
-    # 去尾部标点
     cleaned = _ANSWER_SUFFIX_RE.sub('', cleaned)
 
     if question_type == "multiple":
@@ -189,13 +196,12 @@ def extract_answer(ai_response: str, question_type: str) -> str:
 
 
 def _process_multiple_answer(text: str) -> str:
-    """多选答案处理：检测字母/内容格式并统一为 # 分隔"""
+    """多选答案处理"""
     if '#' in text:
         return _normalize_hash_separated(text)
     result = _detect_letters(text)
     if result:
         return result
-    # 尝试按逗号/空格分隔
     parts = re.split(r'[,，\s、]+', text)
     parts = [p.strip() for p in parts if p.strip()]
     if len(parts) >= 2:
@@ -204,7 +210,7 @@ def _process_multiple_answer(text: str) -> str:
 
 
 def _process_judgement_answer(text: str) -> str:
-    """判断答案标准化：统一为「正确」或「错误」"""
+    """判断答案标准化"""
     positive = {'正确', '对', 'true', '√', 'yes', '是', 'right', 't', 'v'}
     negative = {'错误', '错', 'false', '×', 'no', '否', 'wrong', 'f', 'x'}
     lower = text.lower().strip()

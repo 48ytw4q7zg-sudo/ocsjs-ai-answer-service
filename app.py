@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-EduBrain AI - 智能题库系统 v2.2.0
+EduBrain AI - 智能题库系统 v2026.6.10.1739
 基于 Anthropic 兼容协议的智能题库服务，支持 ccswitch 动态配置
 优先通过 ccswitch 代理调用 API，自动读取 Claude Code 的实时配置
-新增：增强提示词（题目+选项强制合并）、空答案自动重试、DeepSeek 深度适配
 作者：QXW
-版本：2.2.0
+版本：2026.6.10.1739
 """
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
@@ -28,7 +27,7 @@ logger = setup_logger('ai_answer_service', level=level)
 logger.info(f"配置来源: {Config.CONFIG_SOURCE}")
 logger.info(f"AI 模型: {Config.ANTHROPIC_MODEL}, Base URL: {Config.ANTHROPIC_BASE_URL}")
 if Config.CCSWITCH_RAW_MODEL and Config.CCSWITCH_RAW_MODEL != Config.ANTHROPIC_MODEL:
-    logger.info(f"模型名已净化: '{Config.CCSWITCH_RAW_MODEL}' → '{Config.ANTHROPIC_MODEL}'")
+    logger.info(f"模型名已净化: '{Config.CCSWITCH_RAW_MODEL}' -> '{Config.ANTHROPIC_MODEL}'")
 
 app = Flask(__name__)
 CORS(app)
@@ -66,7 +65,7 @@ SYSTEM_PROMPT = (
     "- 填空题：直接输出填空处的答案文本"
 )
 
-_SERVER_VERSION = "2.2.0"
+_SERVER_VERSION = "2026.6.10.1739"
 
 
 def verify_access_token(req):
@@ -86,30 +85,87 @@ def build_ai_client():
     )
 
 
+def _extract_text_from_response(response):
+    """从 AI 响应中安全提取文本内容。
+
+    遍历所有 content block，返回第一个 TextBlock 的文本。
+    兼容 DeepSeek Anthropic 层可能返回非标准 block 结构的情况。
+    """
+    if not response.content:
+        logger.warning("AI 响应 content 为空列表")
+        return None
+    for i, block in enumerate(response.content):
+        block_type = getattr(block, 'type', 'unknown')
+        if hasattr(block, 'text') and block.text and block.text.strip():
+            if i > 0:
+                logger.info(f"从 content[{i}] 获取文本 (type={block_type})")
+            return block.text.strip()
+        elif block_type != 'text':
+            logger.debug(f"跳过非文本 block[{i}]: type={block_type}")
+    logger.warning("AI 响应所有 block 均无有效文本")
+    return None
+
+
 def _call_ai(prompt: str, max_tokens: int = 300):
     # type: (str, int) -> Optional[str]
-    """调用 AI API，重试 2 次（含备选提示词策略）"""
-    # 第 1 次：正常调用
+    """调用 AI API，2 次尝试：正常调用 + 降温简化重试。"""
     for attempt in range(2):
         try:
+            _current_prompt = prompt
+            _current_temp = Config.TEMPERATURE
+            if attempt > 0:
+                _current_temp = 0.3
+                # 第 2 次重试用更简洁的指令，减少 AI 困惑
+                _current_prompt = _build_simple_prompt(prompt)
+
             response = client.messages.create(
                 model=Config.ANTHROPIC_MODEL,
-                temperature=0.3 if attempt > 0 else Config.TEMPERATURE,
+                temperature=_current_temp,
                 max_tokens=max_tokens,
                 system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": _current_prompt}],
             )
-            if response.content and len(response.content) > 0:
-                block = response.content[0]
-                if hasattr(block, 'text') and block.text and block.text.strip():
-                    return block.text.strip()
-        except (anthropic.APIStatusError, anthropic.APITimeoutError, anthropic.APIConnectionError):
+
+            text = _extract_text_from_response(response)
+            if text:
+                return text
+
+        except (anthropic.APIStatusError, anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
+            logger.warning(f"API 调用失败 (attempt {attempt + 1}): {type(e).__name__}: {e}")
             if attempt == 1:
                 raise
+
         if attempt == 0:
-            logger.warning(f"AI 返回空文本，尝试第 {attempt + 2} 次（降温 + 更短提示）...")
+            logger.warning("第 1 次调用无有效文本，1 秒后重试...")
+            time.sleep(1)
 
     return None
+
+
+def _build_simple_prompt(original_prompt: str) -> str:
+    """从复杂提示词中提取题目和选项，构建极简版提示。
+
+    当完整提示词无法获得有效回答时使用，去除所有复杂指令。
+    """
+    # 提取【题型】行和选项行
+    lines = original_prompt.split('\n')
+    simple = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # 跳过复杂指令段落
+        if any(skip in stripped for skip in [
+            '请仔细阅读', '注意：', '不要输出', '只输出',
+            '这是一道', '用 # 号', '不是字母', '候选选项',
+        ]):
+            continue
+        simple.append(stripped)
+
+    result = '\n'.join(simple) if simple else original_prompt
+    if result != original_prompt:
+        logger.debug(f"简化提示词: {result[:120]}...")
+    return result
 
 
 @app.route('/api/search', methods=['GET', 'POST'])
@@ -146,7 +202,7 @@ def search():
         if len(question) > Config.MAX_QUESTION_LENGTH:
             return jsonify({'code': 0, 'msg': f'问题内容过长，最大{Config.MAX_QUESTION_LENGTH}字符'}), 400
 
-        logger.info(f"接收到问题: '{question[:80]}...' (类型: {question_type}, 选项: {bool(options)})")
+        logger.info(f"接收到问题: '{question[:120]}' (类型: {question_type}, 有选项: {bool(options)})")
 
         if cache is not None:
             cached_answer = cache.get(question, question_type, options)
@@ -155,13 +211,12 @@ def search():
                 logger.info(f"从缓存获取答案 (耗时: {elapsed:.2f}秒)")
                 return jsonify(format_answer_for_ocs(question, cached_answer))
 
-        # 构建完整提示词（题目+选项+题型+指令）
         full_prompt = parse_question_and_options(question, options, question_type)
-        logger.debug(f"AI 提示词: {full_prompt[:200]}...")
+        logger.debug(f"AI 提示词 ({len(full_prompt)} 字符): {full_prompt[:200]}...")
 
         ai_answer = _call_ai(full_prompt)
         if ai_answer is None:
-            return jsonify({'code': 0, 'msg': 'AI 未返回有效答案'})
+            return jsonify({'code': 0, 'msg': 'AI 未返回有效答案，请重试'})
 
         processed_answer = extract_answer(ai_answer, question_type)
 
@@ -179,7 +234,7 @@ def search():
         })
 
         elapsed = time.time() - t_start
-        logger.info(f"问题处理完成 (耗时: {elapsed:.2f}秒, 答案: {processed_answer})")
+        logger.info(f"完成 (耗时: {elapsed:.2f}秒, 答案: {processed_answer})")
 
         return jsonify(format_answer_for_ocs(question, processed_answer))
 

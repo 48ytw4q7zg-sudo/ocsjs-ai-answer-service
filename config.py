@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-配置模块 v2.1.0
+配置模块 v2026.6.10.1739
 优先从 ccswitch (Claude Code settings.json) 读取 API 设置，
 未检测到有效配置时自动回退到 .env 文件。
 新增：运行时重载、配置来源时间戳、DeepSeek 优化参数。
