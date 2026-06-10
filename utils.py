@@ -6,21 +6,24 @@
 from __future__ import annotations
 
 import time
+import threading
 import hashlib
 import re
 from typing import Dict, Any, Optional
 
 
 class SimpleCache:
-    """简单的内存缓存，支持 TTL 过期和 LRU 淘汰"""
+    """线程安全的内存缓存，支持 TTL 过期和 LRU 淘汰"""
 
     def __init__(self, expiration_seconds: int = 86400, max_size: int = 10000):
         self.cache: Dict[str, tuple[float, str]] = {}
         self.expiration = expiration_seconds
         self.max_size = max_size
+        self._lock = threading.Lock()
 
     def __len__(self) -> int:
-        return len(self.cache)
+        with self._lock:
+            return len(self.cache)
 
     @staticmethod
     def _generate_key(question: str, question_type: str, options: str) -> str:
@@ -30,34 +33,45 @@ class SimpleCache:
     def get(self, question: str, question_type: str = "",
             options: str = "") -> Optional[str]:
         key = self._generate_key(question, question_type, options)
-        entry = self.cache.get(key)
-        if entry is None:
+        with self._lock:
+            entry = self.cache.get(key)
+            if entry is None:
+                return None
+            ts, value = entry
+            if time.time() - ts < self.expiration:
+                # LRU: 更新时间戳到最新（适用于频繁访问的缓存项）
+                self.cache[key] = (time.time(), value)
+                return value
+            del self.cache[key]
             return None
-        ts, value = entry
-        if time.time() - ts < self.expiration:
-            return value
-        del self.cache[key]
-        return None
 
     def set(self, question: str, answer: str, question_type: str = "",
             options: str = "") -> None:
         key = self._generate_key(question, question_type, options)
-        if len(self.cache) >= self.max_size:
-            # 找到时间戳最小的 key（最旧）并删除
-            oldest = min(self.cache, key=lambda k: self.cache[k][0])
-            del self.cache[oldest]
-        self.cache[key] = (time.time(), answer)
+        with self._lock:
+            if len(self.cache) >= self.max_size:
+                self._evict_one()
+            self.cache[key] = (time.time(), answer)
 
-    def clear(self) -> None:
-        self.cache.clear()
+    def clear(self) -> int:
+        with self._lock:
+            count = len(self.cache)
+            self.cache.clear()
+            return count
 
     def remove_expired(self) -> int:
         now = time.time()
-        expired = [k for k, (ts, _) in self.cache.items()
-                    if now - ts >= self.expiration]
-        for k in expired:
-            del self.cache[k]
-        return len(expired)
+        with self._lock:
+            expired = [k for k, (ts, _) in self.cache.items()
+                        if now - ts >= self.expiration]
+            for k in expired:
+                del self.cache[k]
+            return len(expired)
+
+    def _evict_one(self) -> None:
+        """LRU 淘汰：删除时间戳最小的条目（最长时间未访问）"""
+        oldest = min(self.cache, key=lambda k: self.cache[k][0])
+        del self.cache[oldest]
 
 
 def format_answer_for_ocs(question: str, answer: str) -> Dict[str, Any]:
@@ -87,6 +101,7 @@ def parse_question_and_options(question: str, options: str,
 
 
 _OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+_OPTION_SET = frozenset(_OPTION_LETTERS)
 
 
 def extract_answer(ai_response: str, question_type: str) -> str:
@@ -111,37 +126,42 @@ def _normalize_hash_separated(text: str) -> str:
     parts = [p.strip() for p in text.split('#') if p.strip()]
     letters = []
     for p in parts:
-        upper = p.upper()
-        if len(upper) == 1 and upper in _OPTION_LETTERS:
+        upper = p.strip().upper()
+        if not upper:
+            continue
+        if len(upper) == 1 and upper in _OPTION_SET:
             letters.append(upper)
         else:
             # 尝试从长文本中提取首字母
-            first = upper[0] if upper else ''
-            if first in _OPTION_LETTERS:
+            first = upper[0]
+            if first in _OPTION_SET:
                 letters.append(first)
     return '#'.join(letters) if letters else text
 
 
 def _detect_letters(text: str) -> Optional[str]:
     """从文本中检测选项字母并返回 # 分隔格式"""
-    upper = text.upper()
+    upper = text.upper().strip()
+    if not upper:
+        return None
 
     # 模式 1: 连续字母如 "ABC"
-    m = re.match(r'^([A-H]+)$', upper.replace(' ', '').replace(',', ''))
+    clean = upper.replace(' ', '').replace(',', '').replace('，', '')
+    m = re.match(r'^([A-H]+)$', clean)
     if m:
         return '#'.join(m.group(1))
 
     # 模式 2: 逐行扫描，找纯字母行
     for line in text.split('\n'):
-        clean = line.strip().rstrip(',.;，。；')
-        if not clean or len(clean) > 8:
+        line_clean = line.strip().rstrip(',.;，。；')
+        if not line_clean or len(line_clean) > 8:
             continue
-        letters_only = clean.replace(',', '').replace(' ', '').upper()
-        if all(c in _OPTION_LETTERS for c in letters_only):
+        letters_only = line_clean.replace(',', '').replace(' ', '').replace('，', '').upper()
+        if letters_only and all(c in _OPTION_SET for c in letters_only):
             return '#'.join(letters_only)
 
-    # 模式 3: 提取所有出现的选项字母
-    found = sorted(set(c for c in upper if c in _OPTION_LETTERS),
+    # 模式 3: 提取所有出现的选项字母，去重并按 A-H 顺序排列
+    found = sorted(set(c for c in upper if c in _OPTION_SET),
                    key=lambda c: _OPTION_LETTERS.index(c))
     if len(found) >= 2:
         return '#'.join(found)

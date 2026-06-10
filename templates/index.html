@@ -32,14 +32,14 @@
                     <h1 class="display-4 mb-3">EduBrain AI</h1>
                     <p class="lead text-muted">新一代智能题库服务，兼容 OCS 题库接口</p>
                 </div>
-        
+
                 <div class="card shadow-sm">
                     <div class="card-body">
                         <div class="form-group mb-4">
                             <label class="form-label" for="question">问题内容</label>
                             <textarea class="form-control" id="question" rows="3" placeholder="请输入问题内容"></textarea>
                         </div>
-                        
+
                         <div class="form-group mb-4">
                             <label class="form-label" for="question-type">问题类型</label>
                             <select class="form-select" id="question-type">
@@ -50,39 +50,39 @@
                                 <option value="completion">填空题</option>
                             </select>
                         </div>
-                        
+
                         <div class="form-group mb-4">
                             <label class="form-label" for="options">选项内容</label>
-                            <textarea class="form-control" id="options" rows="4" 
+                            <textarea class="form-control" id="options" rows="4"
                                 placeholder="请输入选项内容，每行一个选项。例如：&#10;A. 选项1&#10;B. 选项2&#10;C. 选项3&#10;D. 选项4"></textarea>
                         </div>
-                        
+
                         <div class="text-center">
                             <button id="search-btn" class="btn btn-primary btn-lg px-4">获取答案</button>
                         </div>
                     </div>
                 </div>
 
-                    <div id="loading" class="text-center mt-4" style="display: none;">
+                <div id="loading" class="text-center mt-4" style="display: none;">
                     <div class="spinner-border text-primary" role="status">
                         <span class="visually-hidden">加载中...</span>
                     </div>
                     <p class="mt-2 text-muted">AI正在思考，请稍候...</p>
                 </div>
-                
+
                 <div id="result" class="card shadow-sm mt-4" style="display: none;">
                     <div class="card-body">
                         <h5 class="card-title mb-3">AI回答结果</h5>
                         <div id="answer-content" class="p-3 bg-light rounded"></div>
                     </div>
                 </div>
-                
+
                 <div class="card shadow-sm mt-5">
                     <div class="card-header bg-light">
                         <h5 class="mb-0">OCS配置示例</h5>
                     </div>
                     <div class="card-body">
-                        <pre class="mb-0 bg-light p-3 rounded"><code>[
+                        <pre id="ocs-config" class="mb-0 bg-light p-3 rounded"><code>[
   {
     "name": "AI智能题库",
     "homepage": "自定义主页地址",
@@ -96,7 +96,10 @@
     },
     "handler": "return (res)=> res.code === 1 ? [res.question, res.answer] : [res.msg, undefined]"
   }
-]</pre>
+]</code></pre>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -105,69 +108,75 @@
             const question = document.getElementById('question').value.trim();
             const questionType = document.getElementById('question-type').value;
             const options = document.getElementById('options').value.trim();
-            
+
             if (!question) {
                 alert('请输入问题内容');
                 return;
             }
-            
-            // 显示加载中
+
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
-            
+
             try {
                 const response = await axios.get('/api/search', {
                     params: {
                         title: question,
-                        type: questionType,
-                        options: options
+                        type: questionType || undefined,
+                        options: options || undefined
                     }
                 });
-                
-                const result = response.data;
-                
-                // 显示结果
+
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('result').style.display = 'block';
-                
+                const resultEl = document.getElementById('result');
+                const answerEl = document.getElementById('answer-content');
+                const result = response.data;
+
                 if (result.code === 1) {
-                    // 成功获取答案
-                    document.getElementById('result').classList.remove('error');
-                    document.getElementById('answer-content').innerHTML = `<p><strong>问题：</strong>${result.question}</p><p><strong>答案：</strong>${result.answer}</p>`;
+                    resultEl.classList.remove('border-danger');
+                    answerEl.innerHTML = '<p><strong>问题：</strong>' + escapeHtml(result.question) + '</p><p><strong>答案：</strong><span class="text-success fw-bold">' + escapeHtml(result.answer) + '</span></p>';
                 } else {
-                    // 获取答案失败
-                    document.getElementById('result').classList.add('error');
-                    document.getElementById('answer-content').innerHTML = `<p>${result.msg || '获取答案失败'}</p>`;
+                    resultEl.classList.add('border', 'border-danger');
+                    answerEl.innerHTML = '<p class="text-danger">' + escapeHtml(result.msg || '获取答案失败') + '</p>';
                 }
             } catch (error) {
-                // 显示错误信息
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('result').style.display = 'block';
-                document.getElementById('result').classList.add('error');
-                document.getElementById('answer-content').innerHTML = `<p>请求失败: ${error.message}</p>`;
+                const resultEl = document.getElementById('result');
+                resultEl.classList.add('border', 'border-danger');
+                const msg = error.response && error.response.data && error.response.data.msg
+                    ? error.response.data.msg
+                    : error.message;
+                document.getElementById('answer-content').innerHTML = '<p class="text-danger">请求失败: ' + escapeHtml(msg) + '</p>';
             }
         });
-        
-        // 更新OCS配置中的URL
-        function updateOcsConfig() {
-            const host = window.location.host;
-            const protocol = window.location.protocol;
-            const baseUrl = `${protocol}//${host}`;
-            
-            let configText = document.getElementById('ocs-config').textContent;
-            configText = configText.replace(/http:\/\/localhost:5000/g, baseUrl);
-            document.getElementById('ocs-config').textContent = configText;
+
+        function escapeHtml(text) {
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(text));
+            return div.innerHTML;
         }
-        
-        // 页面加载完成后执行
-        window.addEventListener('load', updateOcsConfig);
+
+        // 动态更新 OCS 配置中的 URL 为当前服务地址
+        (function() {
+            var host = window.location.host;
+            var protocol = window.location.protocol;
+            var baseUrl = protocol + '//' + host;
+            var configEl = document.getElementById('ocs-config');
+            if (configEl) {
+                var codeEl = configEl.querySelector('code');
+                if (codeEl) {
+                    codeEl.textContent = codeEl.textContent.replace(/http:\/\/localhost:5000/g, baseUrl);
+                }
+            }
+        })();
     </script>
 
-    <footer class="footer mt-5 py-3 bg-light">
+    <footer class="footer py-3 bg-light">
         <div class="container text-center">
-            <p>EduBrain AI - 智能题库系统 v1.3.0</p>
+            <p>EduBrain AI - 智能题库系统 v{{ version }}</p>
             <p>Powered by LynnGuo666</p>
-            <p><small>© 2024-2025 All Rights Reserved</small></p>
+            <p><small>&copy; 2024-2025 All Rights Reserved</small></p>
         </div>
     </footer>
 </body>

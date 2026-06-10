@@ -5,12 +5,9 @@
 未检测到有效配置时自动回退到 .env 文件。
 """
 import os
-import logging
 from dotenv import load_dotenv
 
 from ccswitch import get_ccswitch_config
-
-logger = logging.getLogger(__name__)
 
 # 强制覆盖加载 .env
 load_dotenv(override=True)
@@ -42,6 +39,10 @@ class Config:
         ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "deepseek-v4-pro")
         CONFIG_SOURCE = '.env'
 
+    # ---- AI 客户端配置 ----
+    API_TIMEOUT = float(os.getenv("API_TIMEOUT", "30.0"))
+    API_MAX_RETRIES = int(os.getenv("API_MAX_RETRIES", "2"))
+
     # ---- 日志配置 ----
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
@@ -55,3 +56,6 @@ class Config:
     # ---- 缓存配置 ----
     ENABLE_CACHE = os.getenv("ENABLE_CACHE", "True").lower() == "true"
     CACHE_EXPIRATION = int(os.getenv("CACHE_EXPIRATION", "86400"))
+
+    # ---- 输入验证 ----
+    MAX_QUESTION_LENGTH = int(os.getenv("MAX_QUESTION_LENGTH", "2000"))
