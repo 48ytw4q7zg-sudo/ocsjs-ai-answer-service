@@ -151,6 +151,12 @@ _ANSWER_PREFIX_RE = re.compile(
     re.IGNORECASE
 )
 _ANSWER_SUFFIX_RE = re.compile(r'[。！!；;，,]$')
+_OPTION_LETTER_PREFIX_RE = re.compile(r'^([A-Ha-h][.、．]\s*)')
+
+
+def _strip_option_letter_prefix(text: str) -> str:
+    """去除选项字母前缀，如 'B. 北京' → '北京'"""
+    return _OPTION_LETTER_PREFIX_RE.sub('', text).strip()
 
 
 def extract_answer(ai_response: str, question_type: str) -> str:
@@ -176,6 +182,8 @@ def extract_answer(ai_response: str, question_type: str) -> str:
         return _process_multiple_answer(cleaned)
     elif question_type == "judgement":
         return _process_judgement_answer(cleaned)
+    elif question_type == "single":
+        return _strip_option_letter_prefix(cleaned)
 
     return cleaned
 
