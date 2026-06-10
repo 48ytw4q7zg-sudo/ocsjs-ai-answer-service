@@ -119,7 +119,7 @@ def _build_instructions(question_type: str, has_options: bool) -> str:
         return (
             "请逐一分析每个选项的内容，判断哪个是正确的。\n"
             "警示：即使这道题你在网上见过，当前试卷的选项顺序可能不同、\n"
-            "选项内容可能有微调（如'选择正确的'vs'选择错误的'）。\n"
+            '选项内容可能有微调（如"选择正确的"vs"选择错误的"）。\n'
             "必须以当前提供的选项为准，仔细比对后选择。\n"
             "只输出正确选项的完整文本内容（不是选项字母），如「北京」。"
         )
@@ -140,14 +140,8 @@ def _build_instructions(question_type: str, has_options: bool) -> str:
         )
     elif question_type == "completion":
         return "只输出填空处的答案文本，不要输出题目。"
-    elif question_type == "single" and has_options:
-        return (
-            "请逐一分析每个选项的内容，判断哪个是正确的。\n"
-            "警示：即使这道题你在网上见过，当前试卷的选项顺序可能不同、\n"
-            '选项内容可能有微调（如"选择正确的"vs"选择错误的"）。\n'
-            "必须以当前提供的选项为准，仔细比对后选择。\n"
-            "只输出正确选项的完整文本内容（不是选项字母），如「北京」。"
-        )
+    else:
+        return "只输出最终答案。"
 
 
 _OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
