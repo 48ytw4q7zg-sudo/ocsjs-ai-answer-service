@@ -1,25 +1,27 @@
+Based on the provided code map and original README, I'll create a comprehensive README.md file:
+
 # EduBrain AI - 智能题库系统
 
-这是一个基于 Python 和 Anthropic 兼容协议的智能题库服务，专为[OCS (Online Course Script)](https://github.com/ocsjs/ocsjs)设计，可以通过AI自动回答题目。此服务实现了与OCS AnswererWrapper兼容的API接口，方便用户将AI能力整合到OCS题库搜索中。
+这是一个基于 Python 和 Anthropic 兼容协议的智能题库服务，专为 [OCS (Online Course Script)](https://github.com/ocsjs/ocsjs) 设计，可以通过 AI 自动回答题目。此服务实现了与 OCS AnswererWrapper 兼容的 API 接口，方便用户将 AI 能力整合到 OCS 题库搜索中。
 
 **支持 ccswitch 动态配置**：自动读取 Claude Code 的实时 API 代理设置，无需手动配置 API 密钥。
 
 ## ⚠️ 重要提示
 
-> [!IMPORTANT]  
+> [!IMPORTANT]
 > - 本项目仅供个人学习使用，不保证稳定性，且不提供任何技术支持。
 > - 使用者必须在遵循 DeepSeek 的[使用条款](https://platform.deepseek.com/policies)以及**法律法规**的情况下使用，不得用于非法用途。
 > - 根据[《生成式人工智能服务管理暂行办法》](http://www.cac.gov.cn/2023-07/13/c_1690898327029107.htm)的要求，请勿对中国地区公众提供一切未经备案的生成式人工智能服务。
 > - 使用者应当遵守相关法律法规，承担相应的法律责任
-> - 服务不对AI生成内容的准确性做出保证
+> - 服务不对 AI 生成内容的准确性做出保证
 
 ## 功能特点
 
 - 💡 **AI驱动**：通过 ccswitch 代理或直接 API 调用生成智能回答
 - 🔌 **ccswitch 集成**：自动读取 `~/.claude/settings.json`，无需手动配置密钥
-- 🔄 **OCS兼容**：完全兼容OCS的AnswererWrapper题库接口
+- 🔄 **OCS兼容**：完全兼容 OCS 的 AnswererWrapper 题库接口
 - 🚀 **高性能**：内存缓存优化，快速响应请求
-- 🔒 **安全可靠**：支持访问令牌验证，保护API调用
+- 🔒 **安全可靠**：支持访问令牌验证，保护 API 调用
 - 💬 **多种题型**：支持单选、多选、判断、填空等题型
 - 📊 **数据统计**：实时监控服务状态和使用情况
 - 🌐 **响应式UI**：支持多设备访问的现代化界面
@@ -36,7 +38,7 @@
 ### 1. 克隆代码库
 
 ```bash
-git clone https://github.com/LynnGuo666/ocsjs-ai-answer-service.git
+git clone https://gitee.com/qinxinwei123/ocsjs-ai-answer-service.git
 cd ocsjs-ai-answer-service
 ```
 
@@ -80,7 +82,7 @@ ANTHROPIC_MODEL=deepseek-v4-pro
 python app.py
 ```
 
-服务将默认运行在`http://localhost:5000`
+服务将默认运行在 `http://localhost:5000`
 
 ### 5. 在OCS中配置使用
 
@@ -102,6 +104,30 @@ python app.py
     "handler": "return (res)=> res.code === 1 ? [res.question, res.answer] : [res.msg, undefined]"
   }
 ]
+```
+
+## 项目结构
+
+```
+ocsjs-ai-answer-service/
+├── app.py              # 主应用文件，包含所有API路由
+├── ccswitch.py        # ccswitch 配置读取模块
+├── config.py          # 配置文件
+├── logger.py          # 日志模块
+├── utils.py           # 工具函数（缓存、答案格式化等）
+├── test_service.py    # 服务测试脚本
+├── requirements.txt  # Python依赖
+├── Dockerfile         # Docker镜像配置
+├── docker-compose.yml # Docker Compose配置
+├── .env.example       # 环境变量示例
+├── .gitignore         # Git忽略配置
+├── api_docs.md        # API文档
+├── ocs_config_example.json # OCS配置示例
+├── static/
+│   └── style.css      # 前端样式
+└── templates/
+    ├── index.html    # 首页模板
+    └── dashboard.html # 控制台模板
 ```
 
 ## API接口说明
@@ -190,9 +216,15 @@ python app.py
 }
 ```
 
+### 前端页面
+
+- **首页**: `http://localhost:5000/` - 题目搜索测试页面
+- **控制台**: `http://localhost:5000/dashboard` - 服务状态监控和历史记录
+- **API文档**: `http://localhost:5000/docs` - API文档页面
+
 ## 安全设置
 
-如果你想增加安全性，可以在`.env`文件中设置访问令牌：
+如果你想增加安全性，可以在 `.env` 文件中设置访问令牌：
 
 ```
 ACCESS_TOKEN=your_secret_token_here
@@ -237,6 +269,12 @@ docker build -t ai-answer-service .
 docker run -p 5000:5000 --env-file .env ai-answer-service
 ```
 
+或使用 docker-compose：
+
+```bash
+docker-compose up -d
+```
+
 ## 常见问题
 
 ### 1. AI答案准确性
@@ -255,13 +293,24 @@ AI生成的答案可能存在以下情况：
 
 ### 2. 多选题答案格式
 
-对于多选题，OCS期望的答案格式是用`#`分隔的选项，例如`A#B#C`。本服务已经处理了这个格式，会自动将AI返回的多选答案转换为此格式。
+对于多选题，OCS期望的答案格式是用 `#` 分隔的选项，例如 `A#B#C`。本服务已经处理了这个格式，会自动将AI返回的多选答案转换为此格式。
 
-### 2. API请求限制
+### 3. API请求限制
 
 注意 DeepSeek API 有使用限制和费用。确保你的账户有足够的额度来处理预期的请求量。
 
-### 3. 网络连接问题
+### 4. 网络连接问题
 
 确保部署此服务的服务器能够访问 DeepSeek API（api.deepseek.com）。某些地区可能需要代理服务。
 
+## 技术栈
+
+- **后端**: Flask (Python Web 框架)
+- **AI**: Anthropic 兼容 API (DeepSeek)
+- **前端**: Bootstrap 5 + 原生 JavaScript
+- **缓存**: 内存缓存 (SimpleCache)
+- **部署**: Docker + Gunicorn
+
+## 许可证
+
+本项目仅供个人学习使用，请遵守相关法律法规和 API 服务提供商的使用条款。
