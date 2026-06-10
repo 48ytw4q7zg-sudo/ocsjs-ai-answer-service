@@ -2,7 +2,7 @@
 
 基于 Anthropic 兼容协议的智能题库服务，专为 [OCS (Online Course Script)](https://github.com/ocsjs/ocsjs) 设计，通过 AI 自动回答题目。实现与 OCS AnswererWrapper 兼容的 API 接口，集成 ccswitch 动态配置，无需手动管理 API 密钥。
 
-**版本**: 2.0.0
+**版本**: 2.1.0
 **作者**: QXW
 
 ---
@@ -22,15 +22,17 @@
 
 - **AI 驱动**: 通过 Anthropic 兼容协议调用 DeepSeek API 生成智能回答
 - **ccswitch 集成**: 自动读取 `~/.claude/settings.json` 中的 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL` 等字段，无需手动配置密钥
+- **模型名自动净化** (v2.1.0): 自动去除 settings.json 中模型名的 `[1M]`/`[200K]` 等后缀，确保 DeepSeek API 兼容
+- **运行时配置重载** (v2.1.0): `/api/config/reload` 端点支持不停机切换 API 配置，ccswitch 配置变更即时生效
 - **直连 API 支持**: ccswitch 离线时自动回退到 `.env` 配置，支持直连 DeepSeek 等 Anthropic 兼容 API
 - **OCS 兼容**: 完全兼容 OCS 的 AnswererWrapper 题库接口
 - **高性能缓存**: 线程安全的内存缓存（MD5 哈希键 + TTL 过期 + LRU 淘汰）
 - **安全可靠**: 支持 ACCESS_TOKEN 双重验证（Header `X-Access-Token` / URL `?token=`）
 - **多种题型**: 支持单选(single)、多选(multiple)、判断(judgement)、填空(completion)
 - **错误处理**: API 超时、连接失败、HTTP 错误分级处理与友好提示
-- **数据统计**: `/dashboard` 仪表盘实时监控服务状态和问答历史
+- **数据统计**: `/dashboard` 仪表盘实时监控服务状态、ccswitch 配置详情和问答历史
 - **Web UI**: Bootstrap 5 响应式界面，支持移动端，XSS 防护
-- **日志轮转**: RotatingFileHandler 自动按 10MB 切割，保留 5 个历史文件
+- **日志轮转**: RotatingFileHandler 自动按 10MB 切割，保留 5 个历史文件，Windows 控制台 UTF-8 兼容
 - **Docker 部署**: 提供 Dockerfile + docker-compose.yml，支持容器化运行
 
 ---
@@ -71,8 +73,10 @@ python app.py
 启动日志：
 ```
 配置来源: ccswitch
-AI 模型: deepseek-v4-pro, Base URL: https://api.deepseek.com/anthropic
+AI 模型: deepseek-v4-pro, Base URL: http://127.0.0.1:15721
 ```
+
+> **v2.1.0 新特性**: 如果 settings.json 中模型名为 `deepseek-v4-pro[1M]`，服务会自动净化为 `deepseek-v4-pro`，并记录净化日志。
 
 **方式二：手动配置 .env**
 
@@ -124,12 +128,12 @@ python app.py
 
 ```
 ocsjs-ai-answer-service/
-├── app.py                  # 主应用入口 (Flask Web 服务，7 路由)
-├── config.py               # 配置模块 (ccswitch 优先 + .env 回退，14 项配置)
-├── ccswitch.py             # ccswitch 配置读取模块 (3 函数，5 级模型回退)
+├── app.py                  # 主应用入口 (Flask Web 服务，8 路由)
+├── config.py               # 配置模块 (ccswitch 优先 + .env 回退，16 项配置 + 运行时重载)
+├── ccswitch.py             # ccswitch 配置读取模块 (5 函数 + 5 级模型回退 + 模型名净化)
 ├── utils.py                # 工具函数 (线程安全缓存 / 答案格式化 / 答案提取)
-├── logger.py               # 日志模块 (RotatingFileHandler 轮转)
-├── test_service.py         # 服务测试脚本 (4种题型覆盖)
+├── logger.py               # 日志模块 (RotatingFileHandler 轮转 + Windows UTF-8 修复)
+├── test_service.py         # 服务测试脚本 (7 项测试覆盖)
 ├── requirements.txt        # Python 依赖清单 (6 包)
 ├── Dockerfile              # Docker 镜像构建文件 (8 层)
 ├── docker-compose.yml      # Docker Compose 编排文件 (含健康检查)
@@ -143,7 +147,7 @@ ocsjs-ai-answer-service/
 │   └── style.css           # 全局样式 (17 区域，含滚动条美化 / 移动端适配)
 └── templates/
     ├── index.html          # 首页 (Bootstrap 5 + Axios + XSS 防护)
-    └── dashboard.html      # 仪表盘 (Bootstrap 5 + DataTables + jQuery)
+    └── dashboard.html      # 仪表盘 (Bootstrap 5 + DataTables + jQuery + ccswitch 详情)
 ```
 
 ---
@@ -156,11 +160,14 @@ ocsjs-ai-answer-service/
 
 **核心函数**:
 
-```python
-_find_settings_path()           # 辅助: 查找 ~/.claude/settings.json 或 settings.local.json
-get_ccswitch_config()           # 主入口: 读取并解析配置，返回 Dict 或 None
-_resolve_model()                # 新: 5 级模型回退解析
-```
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `_find_settings_path()` | `() -> Optional[Path]` | 查找 `~/.claude/settings.json` 或 `settings.local.json` |
+| `get_ccswitch_config()` | `(settings_path=None) -> Optional[Dict]` | 主入口: 读取并解析配置，自动净化模型名 |
+| `_resolve_model()` | `(settings, env) -> str` | 5 级模型回退解析 |
+| `_sanitize_model_name()` | `(model: str) -> str` | **v2.1.0 新增**: 去除 `[1M]`/`[200K]` 等后缀 |
+| `extract_all_env()` | `(settings) -> Dict[str, str]` | **v2.1.0 新增**: 提取 settings.json 中所有 env 变量 |
+| `reload_ccswitch_config()` | `() -> Optional[Dict]` | **v2.1.0 新增**: 运行时强制重新读取配置 |
 
 **`get_ccswitch_config()` 完整流程**:
 
@@ -188,12 +195,34 @@ _resolve_model()                # 新: 5 级模型回退解析
    ④ ANTHROPIC_REASONING_MODEL / 遍历所有后备键 ← 遍历兜底
    ⑤ 'deepseek-v4-pro'                          ← 硬回退
 
-6. 识别代理类型（日志用）：
+6. _sanitize_model_name() 净化模型名（v2.1.0 新增）：
+   正则 r"\[\d+K?M?\]" 去除方括号后缀
+   'deepseek-v4-pro[1M]' → 'deepseek-v4-pro'
+   'claude-opus-4-7[200K]' → 'claude-opus-4-7'
+   无后缀 → 原样返回
+
+7. 识别代理类型（日志用）：
    is_local = '127.0.0.1' in base_url or 'localhost' in base_url
    tag = 'ccswitch代理' if is_local else '直连'
 
-7. 返回 {'api_key': ..., 'base_url': ..., 'model': ...}
+8. 返回 {
+     'api_key': ...,
+     'base_url': ...,
+     'model': ...,        # ← 净化后的模型名
+     'raw_model': ...,    # ← v2.1.0: 原始模型名（未净化）
+     'is_proxy': ...,     # ← v2.1.0: 是否代理模式
+     'source_file': ...,  # ← v2.1.0: 配置文件路径
+   }
 ```
+
+**`_sanitize_model_name()` 净化规则** (v2.1.0 新增):
+
+| 输入 | 输出 | 说明 |
+|------|------|------|
+| `deepseek-v4-pro[1M]` | `deepseek-v4-pro` | 去除 1M 上下文后缀 |
+| `claude-opus-4-7[200K]` | `claude-opus-4-7` | 去除 200K 上下文后缀 |
+| `deepseek-v4-pro` | `deepseek-v4-pro` | 无后缀，原样返回 |
+| `claude-sonnet-4-6[128K]` | `claude-sonnet-4-6` | 去除 128K 上下文后缀 |
 
 **`_resolve_model()` 五级回退详解**:
 
@@ -205,6 +234,30 @@ _resolve_model()                # 新: 5 级模型回退解析
 | 4 | `ANTHROPIC_REASONING_MODEL` / 遍历所有后备键 | 全量遍历兜底 |
 | 5 | `"deepseek-v4-pro"` | 硬编码最终回退值 |
 
+**`extract_all_env()` 提取的 14 个键**:
+
+```
+ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, ANTHROPIC_MODEL,
+ANTHROPIC_DEFAULT_HAIKU_MODEL, ANTHROPIC_DEFAULT_OPUS_MODEL,
+ANTHROPIC_DEFAULT_SONNET_MODEL, ANTHROPIC_REASONING_MODEL,
+ANTHROPIC_DEFAULT_OPUS_MODEL_NAME, ANTHROPIC_DEFAULT_SONNET_MODEL_NAME,
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC,
+CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK,
+CLAUDE_CODE_EFFORT_LEVEL, ENABLE_TOOL_SEARCH,
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+```
+
+这些键值对应仪表盘的 "ccswitch 完整环境变量" 可折叠面板。
+
+**`reload_ccswitch_config()` 运行时重载** (v2.1.0 新增):
+
+```
+1. 调用 get_ccswitch_config() 强制重新读取文件
+2. 额外解析 settings.json → extract_all_env() 获取完整 env
+3. 返回包含 extra_env 字段的完整字典
+4. 供 config.reload_config() 和 /api/config/reload 端点使用
+```
+
 **用户 ccswitch 配置匹配验证** (基于实际 settings.json):
 
 ```
@@ -214,29 +267,46 @@ env.ANTHROPIC_MODEL       = "deepseek-v4-pro"                       ✓ 第1级�
 → 返回: {api_key, base_url, model="deepseek-v4-pro"}
 ```
 
-**调用关系**: `config.py` → `from ccswitch import get_ccswitch_config` → `get_ccswitch_config()`
+**调用关系**: 
+- `config.py` 启动时: `from ccswitch import get_ccswitch_config` → `get_ccswitch_config()`
+- `config.py` 重载时: `from ccswitch import reload_ccswitch_config` → `reload_ccswitch_config()`
+- `app.py` 健康检查: 通过 `Config.CCSWITCH_*` 属性读取
 
 ---
 
 #### 2. `config.py` — 配置模块
 
-配置加载策略：**ccswitch 优先 → .env 回退**
+配置加载策略：**ccswitch 优先 → .env 回退，支持运行时重载**。
 
 **加载流程**:
 
 ```
 1. from dotenv import load_dotenv
 2. load_dotenv(override=True)  ← 强制覆盖模式，确保 .env 值覆盖系统环境变量
-3. _ccswitch = get_ccswitch_config()  ← 调用 ccswitch.py
-4. class Config:
+3. _ccswitch = get_ccswitch_config()  ← 调用 ccswitch.py（自动净化模型名）
+4. _config_loaded_at = time.time()    ← v2.1.0: 记录加载时间戳
+5. class Config:
      if _ccswitch 存在且 api_key 非空:
          ANTHROPIC_API_KEY = _ccswitch['api_key']
          ANTHROPIC_BASE_URL = _ccswitch['base_url']
-         ANTHROPIC_MODEL     = _ccswitch['model']
+         ANTHROPIC_MODEL     = _ccswitch['model']       ← 已净化
          CONFIG_SOURCE       = 'ccswitch'
+         CCSWITCH_RAW_MODEL  = _ccswitch.get('raw_model')   ← v2.1.0
+         CCSWITCH_IS_PROXY   = _ccswitch.get('is_proxy')    ← v2.1.0
+         EXTRA_ENV           = _ccswitch.get('extra_env', {})  ← v2.1.0
      else:
-         从 os.getenv() 读取 ANTHROPIC_API_KEY/BASE_URL/MODEL
+         从 os.getenv() 读取
          CONFIG_SOURCE       = '.env'
+```
+
+**`reload_config()` 运行时重载** (v2.1.0 新增):
+
+```python
+def reload_config() -> bool:
+    # 调用 ccswitch.reload_ccswitch_config()
+    # 成功 → 更新 Config 类属性（API_KEY, BASE_URL, MODEL, RAW_MODEL, IS_PROXY, EXTRA_ENV）
+    # 失败 → 回退到 .env
+    # 返回 True 表示从 ccswitch 加载成功，False 表示回退到 .env
 ```
 
 **`Config` 类属性全表**:
@@ -248,17 +318,21 @@ env.ANTHROPIC_MODEL       = "deepseek-v4-pro"                       ✓ 第1级�
 | `DEBUG` | `DEBUG` | bool | `True` | Flask 调试模式 |
 | `ANTHROPIC_API_KEY` | ccswitch 优先; 回退 `ANTHROPIC_API_KEY` | str | `""` | AI API 密钥 |
 | `ANTHROPIC_BASE_URL` | ccswitch 优先; 回退 `ANTHROPIC_BASE_URL` | str | `"https://api.deepseek.com/anthropic"` | API 地址 |
-| `ANTHROPIC_MODEL` | ccswitch 优先; 回退 `ANTHROPIC_MODEL` | str | `"deepseek-v4-pro"` | 模型名称 |
+| `ANTHROPIC_MODEL` | ccswitch 优先; 回退 `ANTHROPIC_MODEL` | str | `"deepseek-v4-pro"` | 模型名称（已净化） |
 | `CONFIG_SOURCE` | — | str | 动态 | `"ccswitch"` 或 `".env"` |
-| `API_TIMEOUT` | `API_TIMEOUT` | float | `30.0` | API 请求超时秒数（新增） |
-| `API_MAX_RETRIES` | `API_MAX_RETRIES` | int | `2` | API 自动重试次数（新增） |
+| `CCSWITCH_RAW_MODEL` | — | str | `""` | **v2.1.0**: ccswitch 原始模型名（净化前） |
+| `CCSWITCH_IS_PROXY` | — | bool | `False` | **v2.1.0**: 是否通过 ccswitch 本地代理 |
+| `EXTRA_ENV` | — | dict | `{}` | **v2.1.0**: settings.json env 中所有 14 项变量 |
+| `API_TIMEOUT` | `API_TIMEOUT` | float | `30.0` | API 请求超时秒数 |
+| `API_MAX_RETRIES` | `API_MAX_RETRIES` | int | `2` | API 自动重试次数 |
 | `LOG_LEVEL` | `LOG_LEVEL` | str | `"INFO"` | 日志级别 |
 | `ACCESS_TOKEN` | `ACCESS_TOKEN` | str\|None | `None` | 访问令牌（None=不验证） |
 | `MAX_TOKENS` | `MAX_TOKENS` | int | `500` | AI 响应最大 token 数 |
 | `TEMPERATURE` | `TEMPERATURE` | float | `0.7` | AI 生成温度 (0-1) |
 | `ENABLE_CACHE` | `ENABLE_CACHE` | bool | `True` | 是否启用缓存 |
 | `CACHE_EXPIRATION` | `CACHE_EXPIRATION` | int | `86400` | 缓存过期秒数（默认 24h） |
-| `MAX_QUESTION_LENGTH` | `MAX_QUESTION_LENGTH` | int | `2000` | 问题最大字符数（新增） |
+| `MAX_QUESTION_LENGTH` | `MAX_QUESTION_LENGTH` | int | `2000` | 问题最大字符数 |
+| `CONFIG_LOADED_AT` | — | float | 启动时间 | **v2.1.0**: 配置最后加载时间戳 |
 
 ---
 
@@ -272,41 +346,45 @@ Flask Web 服务主文件，是整个系统的中枢。
 1. logging.basicConfig() 初始化根 logger
    └─ 在导入 config 之前执行，防止 ccswitch/config 等子模块产生 "No handler found" 警告
 
-2. from config import Config
-   └─ 触发 config.py 模块加载 → ccswitch 配置读取 → .env 回退
+2. from config import Config, reload_config
+   └─ 触发 config.py 模块加载 → ccswitch 配置读取（含模型名净化）→ .env 回退
 
 3. from logger import setup_logger
 4. logger = setup_logger('ai_answer_service', level=LOG_LEVEL)
-   └─ 用 RotatingFileHandler 重新配置日志（控制台 + 文件轮转）
+   └─ 用 RotatingFileHandler 重新配置日志（控制台 UTF-8 + 文件轮转）
 
-5. Flask(__name__) + CORS(app)
-6. SimpleCache(Config.CACHE_EXPIRATION) 初始化缓存
-7. anthropic.Anthropic(api_key, base_url, timeout=30.0, max_retries=2) 初始化 AI 客户端
+5. 启动日志: 配置来源 + 模型 + Base URL + 净化信息（如适用）
+6. Flask(__name__) + CORS(app)
+7. SimpleCache(Config.CACHE_EXPIRATION) 初始化缓存
+8. anthropic.Anthropic(api_key, base_url, timeout, max_retries) 初始化 AI 客户端
+9. build_ai_client() 函数定义（供运行时重载使用）
 ```
 
 **全局状态**:
 
 | 变量 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `client` | `anthropic.Anthropic` | — | Anthropic 兼容 API 客户端（含超时/重试） |
+| `client` | `anthropic.Anthropic` | — | Anthropic 兼容 API 客户端（含超时/重试，重载时重建） |
 | `cache` | `SimpleCache` / `None` | — | 内存缓存实例（缓存关闭时为 None） |
 | `qa_records` | `deque(maxlen=100)` | — | 问答历史记录队列，自动淘汰最旧记录 |
 | `start_time` | `float` | `time.time()` | 服务启动时间戳 |
 | `SYSTEM_PROMPT` | `str` | 见代码 | AI 系统提示词，定义答题格式规范 |
 | `MAX_RECORDS` | `int` | `100` | 最大历史记录数 |
-| `_SERVER_VERSION` | `str` | `"2.0.0"` | 服务版本号常量 |
+| `_SERVER_VERSION` | `str` | `"2.1.0"` | 服务版本号常量 |
+| `build_ai_client()` | `() -> Anthropic` | — | **v2.1.0 新增**: 用当前配置重建客户端 |
 
 **路由表**:
 
 | 路由 | 方法 | 函数 | 功能 | 令牌验证 |
 |------|------|------|------|:---:|
 | `/` | GET | `index()` | 返回问答测试首页 `index.html`（传递 version 变量） | — |
-| `/dashboard` | GET | `dashboard()` | 返回仪表盘页面（含系统信息 + DataTable 问答历史） | — |
+| `/dashboard` | GET | `dashboard()` | 返回仪表盘页面（含 ccswitch 详情 + 环境变量面板） | — |
 | `/docs` | GET | `docs()` | 读取 `api_docs.md` 并用 `markdown` 库渲染为 HTML | — |
 | `/api/search` | GET/POST | `search()` | 核心搜索接口，调用 AI 生成答案 | ✓ |
-| `/api/health` | GET | `health_check()` | 健康检查（状态/版本/配置来源/缓存/模型） | — |
+| `/api/health` | GET | `health_check()` | 健康检查（含 ccswitch 净化信息 + config_keys） | — |
+| `/api/config/reload` | POST | `config_reload()` | **v2.1.0 新增**: 运行时重载 ccswitch 配置 | ✓ |
 | `/api/cache/clear` | POST | `clear_cache()` | 清除全部缓存，返回清除条目数量 | ✓ |
-| `/api/stats` | GET | `get_stats()` | 返回服务统计（版本/uptime/模型/缓存/记录数） | ✓ |
+| `/api/stats` | GET | `get_stats()` | 返回服务统计（含 ccswitch 原始模型名） | ✓ |
 
 **`search()` 请求处理全链路**:
 
@@ -333,6 +411,7 @@ Flask Web 服务主文件，是整个系统的中枢。
   ├─ 6. client.messages.create() 调用 AI API
   │      {model, temperature, max_tokens, system, messages}
   │      自动重试 (max_retries=2)，超时 (timeout=30s)
+  │      model 已自动净化（v2.1.0）
   │
   ├─ 7. 提取文本 → response.content[0].text.strip()
   │      空响应 → code:0
@@ -349,7 +428,7 @@ Flask Web 服务主文件，是整个系统的中枢。
          {code:1, question:..., answer:...}
 ```
 
-**错误处理分级（新增）**:
+**错误处理分级**:
 
 | 异常类型 | HTTP 状态码 | 返回消息 |
 |----------|:------:|------|
@@ -357,6 +436,48 @@ Flask Web 服务主文件，是整个系统的中枢。
 | `anthropic.APITimeoutError` | 504 | AI服务响应超时，请重试 |
 | `anthropic.APIConnectionError` | 502 | 无法连接到AI服务 |
 | 其他 `Exception` | 500 | 服务内部错误 |
+
+**`health_check()` 响应详解** (v2.1.0 增强):
+
+```json
+{
+  "status": "ok",
+  "message": "AI题库服务运行正常",
+  "version": "2.1.0",
+  "config_source": "ccswitch",
+  "cache_enabled": true,
+  "cache_size": 42,
+  "model": "deepseek-v4-pro",
+  "base_url": "https://api.deepseek.com/anthropic",
+  "uptime_seconds": 12345.67,
+  "ccswitch": {
+    "raw_model": "deepseek-v4-pro[1M]",
+    "is_proxy": false,
+    "model_sanitized": true
+  },
+  "config_keys": ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", ...]
+}
+```
+
+**ccswitch 子对象字段**:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `raw_model` | string | settings.json 中的原始模型名（可能含 `[1M]` 后缀） |
+| `is_proxy` | bool | 是否通过 ccswitch 本地代理连接（127.0.0.1:15721） |
+| `model_sanitized` | bool | 模型名是否经过净化（raw_model != model） |
+
+**`config_reload()` 配置重载** (v2.1.0 新增):
+
+```
+POST /api/config/reload
+  ├─ 1. verify_access_token() 令牌验证
+  ├─ 2. reload_config() 重新读取 settings.json
+  ├─ 3. 成功 → build_ai_client() 重建全局 client
+  │          返回 {success:true, model, base_url, raw_model, config_source}
+  └─ 4. 失败 → 回退到 .env
+              返回 {success:true, message, config_source:".env"}
+```
 
 **`verify_access_token()` 令牌验证逻辑**:
 
@@ -381,15 +502,25 @@ def verify_access_token(req):
   └─ markdown 库不可用 → <pre>{content}</pre> 纯文本
 ```
 
-**`dashboard()` uptime 计算**:
+**`dashboard()` 仪表盘** (v2.1.0 增强):
 
 ```python
-uptime_seconds = time.time() - start_time
-days = int(uptime_seconds // 86400)
-hours = int((uptime_seconds % 86400) // 3600)
-minutes = int((uptime_seconds % 3600) // 60)
-uptime_str = f"{days}天{hours}小时{minutes}分钟"
+# 构建 ccswitch_info 字典传递给模板
+ccswitch_info = {
+    'raw_model': Config.CCSWITCH_RAW_MODEL,         # 原始模型名
+    'sanitized_model': Config.ANTHROPIC_MODEL,      # 净化后模型名
+    'is_proxy': Config.CCSWITCH_IS_PROXY,           # 是否代理模式
+    'base_url': Config.ANTHROPIC_BASE_URL,          # API 地址
+    'extra_env': Config.EXTRA_ENV,                  # 完整 14 项 env 字典
+}
 ```
+
+仪表盘新增：
+- 配置来源 badge（ccswitch=绿色，.env=灰色）
+- ccswitch 原始模型名 + 已净化标签
+- 连接模式（代理/直连）
+- ccswitch 完整环境变量可折叠面板（14 项）
+- 「重载配置」按钮
 
 **启动入口**:
 
@@ -516,7 +647,18 @@ setup_logger(name: str, log_dir: str = "logs",
 3. 幂等保护: logger.handlers 已存在 → 直接返回（避免重复添加）
 4. RotatingFileHandler: maxBytes=10MB, backupCount=5, encoding='utf-8'
 5. StreamHandler(sys.stdout): 控制台同步输出
+   └─ v2.1.0: Windows 平台自动修复控制台 UTF-8 编码
 6. 统一格式: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+```
+
+**Windows UTF-8 修复** (v2.1.0 新增):
+
+```python
+if sys.platform == 'win32':
+    try:
+        ch.setStream(open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False))
+    except Exception:
+        pass
 ```
 
 **调用关系**: `app.py` 第 27-28 行 `from logger import setup_logger; logger = setup_logger(...)`
@@ -527,12 +669,15 @@ setup_logger(name: str, log_dir: str = "logs",
 
 独立测试脚本，用于验证服务是否正常运行。需先启动 `app.py`。
 
-**主流程**:
+**主流程** (v2.1.0 增强):
 
 ```
 main()
-  ├─ test_health()  — GET /api/health
+  ├─ test_health()       — GET /api/health (验证 ccswitch/raw_model/model_sanitized/config_keys)
   │     └─ 失败 → sys.exit(1)
+  │
+  ├─ test_config_reload() — POST /api/config/reload (v2.1.0 新增)
+  ├─ test_stats()         — GET /api/stats (验证 base_url/ccswitch_raw_model)
   │
   ├─ test_search("中国的首都是哪个城市？", "single", "A. 上海\nB. 北京\nC. 广州\nD. 深圳")
   ├─ test_search("以下哪些是中国的一线城市？", "multiple", "A. 北京\n...\nF. 杭州")
@@ -589,7 +734,7 @@ main()
   └─ IIFE: 替换 OCS 配置中 localhost:5000 为当前服务地址
 ```
 
-**XSS 防护（新增）**:
+**XSS 防护**:
 ```javascript
 function escapeHtml(text) {
     var div = document.createElement('div');
@@ -598,7 +743,7 @@ function escapeHtml(text) {
 }
 ```
 
-**OCS 配置 URL 自动更新（修复）**:
+**OCS 配置 URL 自动更新**:
 - 使用 IIFE 自动执行，不再依赖可能不存在的 window.load 事件
 - 通过 `#ocs-config` ID 精确定位 pre 元素内的 `<code>` 标签
 - 动态替换 `http://localhost:5000` 为当前浏览器实际地址
@@ -613,13 +758,24 @@ function escapeHtml(text) {
 
 | 变量 | 类型 | 说明 |
 |------|------|------|
-| `{{ version }}` | str | 版本号 ("2.0.0") |
-| `{{ config_source }}` | str | 配置来源 ("ccswitch" / ".env") |
+| `{{ version }}` | str | 版本号 ("2.1.0") |
+| `{{ config_source }}` | str | 配置来源 ("ccswitch" / ".env")，渲染为 badge |
 | `{{ cache_enabled }}` | bool | 缓存是否启用 |
 | `{{ cache_size }}` | int | 当前缓存条目数 |
-| `{{ model }}` | str | AI 模型名 |
+| `{{ model }}` | str | AI 模型名（已净化），渲染为 `<code>` |
 | `{{ uptime }}` | str | 运行时长 ("X天X小时X分钟") |
 | `{{ records }}` | deque | 问答历史记录 |
+| `{{ ccswitch_info }}` | dict/None | **v2.1.0 新增**: ccswitch 详情 |
+
+**ccswitch_info 子字段** (v2.1.0):
+
+| 字段 | 说明 |
+|------|------|
+| `raw_model` | 原始模型名（可能含 `[1M]` 后缀） |
+| `sanitized_model` | 净化后模型名 |
+| `is_proxy` | 是否代理模式 |
+| `base_url` | API 地址 |
+| `extra_env` | 完整 env 字典（14 项） |
 
 **DOM 结构**:
 
@@ -627,11 +783,18 @@ function escapeHtml(text) {
 导航栏 (同 index)
 
 系统信息卡片 (.card-header.bg-primary)
-  ├─ 版本 / 配置来源 / 缓存状态
-  ├─ 缓存数量 / 使用模型 / 运行时长
+  左栏:
+    ├─ 版本 / 配置来源 (badge 样式)
+    ├─ 缓存状态 / 缓存数量
+  右栏:
+    ├─ 使用模型 (code 样式)
+    ├─ 运行时长
+    ├─ CCSwitch 原始模型 (code + 已净化 badge)
+    └─ 连接模式 (代理/直连)
+  v2.1.0: ccswitch 完整环境变量可折叠面板 (14 项 key-value 表)
 
 问答记录卡片
-  ├─ 标题 + "清除缓存" 按钮 (fetch POST /api/cache/clear)
+  ├─ 标题 + "重载配置" 按钮 (v2.1.0) + "清除缓存" 按钮
   └─ DataTable 表格 (#qa-records)
         ├─ 时间 (data-order 排序)
         ├─ 问题类型
@@ -646,8 +809,9 @@ function escapeHtml(text) {
   └─ 答案 <pre>
 ```
 
-**前端 JS**:
+**前端 JS** (v2.1.0 增强):
 
+- `reloadConfig()`: **v2.1.0 新增** — `fetch POST /api/config/reload` → 显示结果 → `location.reload()`
 - `clearCache()`: `fetch POST /api/cache/clear` → `location.reload()`
 - `showDetail(q, o, a)`: 填充模态框 → `new bootstrap.Modal().show()`
 - DataTable: responsive + 时间倒序 + 中文 + 10/25/50/100 分页
@@ -707,10 +871,11 @@ CACHE_EXPIRATION=86400     # 过期时间(秒)
 # 输入限制
 MAX_QUESTION_LENGTH=2000   # 问题最大字符数
 
-# ACCESS_TOKEN=...         # 可选，API 访问令牌
+# Access Token 配置 (可选，设置后 API 需要令牌验证)
+# ACCESS_TOKEN=your_access_token_here
 
-# 日志级别
-LOG_LEVEL=INFO             # DEBUG/INFO/WARNING/ERROR/CRITICAL
+# 日志级别 (DEBUG/INFO/WARNING/ERROR/CRITICAL)
+LOG_LEVEL=INFO
 ```
 
 #### 11. `requirements.txt` — Python 依赖
@@ -792,7 +957,7 @@ logs/               *.log
 
 #### 15. `api_docs.md` — API 文档
 
-Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染。包含搜索/健康/缓存/统计四个接口的参数表和示例、OCS 配置示例、安全设置说明。
+Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染（支持 tables 扩展）。v2.1.0 新增：配置重载接口、ccswitch 模型名净化说明、ccswitch 完整字段说明。
 
 #### 16. `ocs_config_example.json` — OCS 配置示例
 
@@ -848,8 +1013,20 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染。�
 **GET** `/api/health` · 无需认证
 
 ```json
-{"status": "ok", "message": "AI题库服务运行正常", "version": "2.0.0",
- "config_source": "ccswitch", "cache_enabled": true, "model": "deepseek-v4-pro"}
+{"status": "ok", "message": "AI题库服务运行正常", "version": "2.1.0",
+ "config_source": "ccswitch", "model": "deepseek-v4-pro",
+ "base_url": "https://api.deepseek.com/anthropic",
+ "ccswitch": {"raw_model": "deepseek-v4-pro[1M]", "is_proxy": false, "model_sanitized": true}}
+```
+
+### 配置重载 (v2.1.0 新增)
+
+**POST** `/api/config/reload` · 需 ACCESS_TOKEN
+
+```json
+{"success": true, "message": "配置已从 ccswitch 重新加载",
+ "config_source": "ccswitch", "model": "deepseek-v4-pro",
+ "base_url": "https://api.deepseek.com/anthropic", "raw_model": "deepseek-v4-pro[1M]"}
 ```
 
 ### 缓存清理
@@ -865,9 +1042,10 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染。�
 **GET** `/api/stats` · 需 ACCESS_TOKEN
 
 ```json
-{"version": "2.0.0", "config_source": "ccswitch", "uptime": 12345.67,
- "model": "deepseek-v4-pro", "cache_enabled": true, "cache_size": 42,
- "qa_records_count": 42}
+{"version": "2.1.0", "config_source": "ccswitch", "uptime": 12345.67,
+ "model": "deepseek-v4-pro", "base_url": "https://api.deepseek.com/anthropic",
+ "cache_enabled": true, "cache_size": 42, "qa_records_count": 42,
+ "ccswitch_raw_model": "deepseek-v4-pro[1M]", "ccswitch_is_proxy": false}
 ```
 
 ---
@@ -876,9 +1054,9 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染。�
 
 | 路由 | 功能 | 说明 |
 |------|------|------|
-| `/` | 问答测试 | Bootstrap 5 表单 + Axios 调用 /api/search + XSS 防护 |
-| `/dashboard` | 统计面板 | Jinja2 渲染 + DataTables + 清除缓存按钮 |
-| `/docs` | API 文档 | api_docs.md 渲染为 HTML |
+| `/` | 问答测试 | Bootstrap 5 表单 + Axios 调用 `/api/search` + XSS 防护 |
+| `/dashboard` | 统计面板 | Jinja2 渲染 + DataTables + ccswitch 详情面板 + 重载/清除按钮 |
+| `/docs` | API 文档 | `api_docs.md` 渲染为 HTML |
 
 ---
 
@@ -891,8 +1069,80 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染。�
 | `/api/search` | `X-Access-Token: <token>` 头 或 `?token=<token>` 参数 |
 | `/api/cache/clear` | 同上 |
 | `/api/stats` | 同上 |
+| `/api/config/reload` (v2.1.0) | 同上 |
 
 > `/`、`/dashboard`、`/docs`、`/api/health` 不受令牌保护。
+
+---
+
+## ccswitch 模型名净化 (v2.1.0 新增)
+
+### 问题背景
+
+ccswitch settings.json 中的模型名可能包含上下文长度后缀，例如：
+- `deepseek-v4-pro[1M]` — 1M token 上下文窗口
+- `claude-opus-4-7[200K]` — 200K token 上下文窗口
+
+DeepSeek API 不识别带方括号后缀的模型名，直接使用会导致 API 400 错误。
+
+### 自动净化机制
+
+`ccswitch.py` 的 `_sanitize_model_name()` 函数在配置加载时自动执行：
+
+```python
+import re
+def _sanitize_model_name(model: str) -> str:
+    return re.sub(r"\[\d+K?M?\]", "", model).strip()
+```
+
+**净化示例**:
+
+| 输入 | 输出 | 触发条件 |
+|------|------|---------|
+| `deepseek-v4-pro[1M]` | `deepseek-v4-pro` | 含 `[1M]` 后缀 |
+| `claude-opus-4-7[200K]` | `claude-opus-4-7` | 含 `[200K]` 后缀 |
+| `claude-sonnet-4-6[128K]` | `claude-sonnet-4-6` | 含 `[128K]` 后缀 |
+| `deepseek-v4-pro` | `deepseek-v4-pro` | 无后缀，原样返回 |
+
+### 净化验证
+
+健康检查接口返回净化状态：
+```json
+{
+  "ccswitch": {
+    "raw_model": "deepseek-v4-pro[1M]",
+    "model_sanitized": true
+  }
+}
+```
+
+启动日志记录净化过程：
+```
+模型名已净化: 'deepseek-v4-pro[1M]' → 'deepseek-v4-pro'
+```
+
+---
+
+## 配置重载工作流 (v2.1.0 新增)
+
+```
+1. 用户在 ccswitch 中切换 API / 模型
+       ↓
+2. ccswitch 自动更新 settings.json
+       ↓
+3. 浏览器访问 /dashboard → 点击「重载配置」
+    或 POST /api/config/reload
+       ↓
+4. reload_config() 重新读取 settings.json
+     ├─ _sanitize_model_name() 自动净化
+     └─ 更新 Config 类所有属性
+       ↓
+5. build_ai_client() 用新配置重建 Anthropic 客户端
+       ↓
+6. 后续 /api/search 请求使用新配置
+```
+
+无需重启服务，零停机切换。
 
 ---
 
@@ -913,6 +1163,22 @@ docker-compose up -d
 ---
 
 ## 版本变更
+
+### v2.1.0 (2026-06-10) — ccswitch 深度集成优化
+- **新增**: 模型名自动净化 (`_sanitize_model_name()`) — 去除 `[1M]`/`[200K]` 等后缀
+- **新增**: 运行时配置重载 (`/api/config/reload` 端点 + `reload_config()`)
+- **新增**: 完整 ccswitch env 提取 (`extract_all_env()` — 14 个键)
+- **新增**: 仪表盘 ccswitch 详情面板（原始模型/连接模式/完整 env 表）
+- **新增**: `build_ai_client()` 函数 — 配置重载时重建客户端
+- **新增**: 健康检查返回 `ccswitch` 子对象（raw_model/is_proxy/model_sanitized/config_keys）
+- **新增**: 统计接口返回 `base_url`/`ccswitch_raw_model`/`ccswitch_is_proxy`
+- **新增**: `test_service.py` 增加配置重载测试
+- **改进**: `ccswitch.py` 返回更多元数据（raw_model/is_proxy/source_file）
+- **改进**: `config.py` 新增 6 个属性（CCSWITCH_RAW_MODEL/IS_PROXY/EXTRA_ENV/CONFIG_LOADED_AT）
+- **改进**: `logger.py` Windows 控制台 UTF-8 编码自动修复
+- **改进**: `dashboard.html` 更好的 UI 布局 + 配置来源 badge 样式
+- **修复**: 模型名包含 `[1M]` 等上下文后缀导致 DeepSeek API 400 错误
+- **文档**: README 全面重写，覆盖每个文件的每个函数/类/路由/属性
 
 ### v2.0.0 (2026-06-10)
 - **新增**: API 超时/重试配置 (`API_TIMEOUT`, `API_MAX_RETRIES`)
@@ -954,6 +1220,20 @@ OCS 期望 `#` 分隔格式。`utils.py:extract_answer()` 通过 4 种模式自�
 
 默认超时 30 秒，可通过 `.env` 中 `API_TIMEOUT` 调整。连接失败自动重试 2 次（`API_MAX_RETRIES`）。
 
+### ccswitch 模型名含后缀 (v2.1.0)
+
+v2.1.0 自动净化，无需手动处理。健康检查接口可验证净化状态。
+
+### 如何确认当前使用的是 ccswitch 还是 .env 配置？
+
+访问 `/api/health`，查看 `config_source` 字段：
+- `"ccswitch"` — 正在使用 `~/.claude/settings.json` 中的配置
+- `".env"` — ccswitch 不可用，回退到 `.env` 文件
+
+### 切换 API 后需要重启服务吗？ (v2.1.0)
+
+不需要。POST `/api/config/reload` 或点击仪表盘「重载配置」即可即时生效。
+
 ### Gitee 推送 SSL 错误
 
 如果遇到 `schannel: failed to receive handshake`，可以临时禁用 schannel：
@@ -970,6 +1250,7 @@ git -c http.sslBackend=openssl push origin main
 - **AI**: Anthropic 兼容协议 (DeepSeek / ccswitch 代理)
 - **前端**: Bootstrap 5 + DataTables + Axios + jQuery
 - **缓存**: 线程安全内存缓存 (MD5 + TTL + LRU)
+- **配置**: ccswitch 实时读取 + 模型名净化 + 运行时重载
 - **部署**: Docker + Docker Compose
 
 ---

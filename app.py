@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-EduBrain AI - 智能题库系统
+EduBrain AI - 智能题库系统 v2.1.0
 基于 Anthropic 兼容协议的智能题库服务，支持 ccswitch 动态配置
 优先通过 ccswitch 代理调用 API，自动读取 Claude Code 的实时配置
-作者：Lynn
-版本：2.0.0
+新增：模型名净化、运行时配置重载、ccswitch 信息展示
+作者：QXW
+版本：2.1.0
 """
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
@@ -15,35 +16,29 @@ import anthropic
 from collections import deque
 from datetime import datetime, timezone
 
-# 导入 config 前配置根 logger（防止子模块 "No handler found" 警告），
-# 真正的日志配置由 setup_logger 完成
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-from config import Config
+from config import Config, reload_config
 from utils import SimpleCache, format_answer_for_ocs, parse_question_and_options, extract_answer
 from logger import setup_logger
 
-# 用 RotatingFileHandler 重新配置日志
 level = getattr(logging, Config.LOG_LEVEL, logging.INFO)
 logger = setup_logger('ai_answer_service', level=level)
 
-# 记录配置来源
 logger.info(f"配置来源: {Config.CONFIG_SOURCE}")
 logger.info(f"AI 模型: {Config.ANTHROPIC_MODEL}, Base URL: {Config.ANTHROPIC_BASE_URL}")
+if Config.CCSWITCH_RAW_MODEL and Config.CCSWITCH_RAW_MODEL != Config.ANTHROPIC_MODEL:
+    logger.info(f"模型名已净化: '{Config.CCSWITCH_RAW_MODEL}' → '{Config.ANTHROPIC_MODEL}'")
 
-# 初始化应用
 app = Flask(__name__)
 CORS(app)
 
-# 初始化缓存
 cache = SimpleCache(Config.CACHE_EXPIRATION) if Config.ENABLE_CACHE else None
 
-# 验证 Anthropic API 密钥
 if not Config.ANTHROPIC_API_KEY:
     logger.critical("未设置 Anthropic API 密钥，请在 .env 文件中配置 ANTHROPIC_API_KEY")
     raise ValueError("请设置环境变量 ANTHROPIC_API_KEY")
 
-# 初始化 Anthropic 客户端（连接 DeepSeek API）
 client = anthropic.Anthropic(
     api_key=Config.ANTHROPIC_API_KEY,
     base_url=Config.ANTHROPIC_BASE_URL,
@@ -51,12 +46,10 @@ client = anthropic.Anthropic(
     max_retries=Config.API_MAX_RETRIES,
 )
 
-# 问答记录存储
 MAX_RECORDS = 100
 qa_records = deque(maxlen=MAX_RECORDS)
 start_time = time.time()
 
-# AI 系统提示词
 SYSTEM_PROMPT = (
     "你是一个专业的考试答题助手。请直接回答答案，不要解释。"
     "选择题只回答选项的内容(如：地球)；"
@@ -65,7 +58,7 @@ SYSTEM_PROMPT = (
     "填空题直接给出答案。"
 )
 
-_SERVER_VERSION = "2.0.0"
+_SERVER_VERSION = "2.1.0"
 
 
 def verify_access_token(req):
@@ -77,36 +70,31 @@ def verify_access_token(req):
     return True
 
 
+def build_ai_client():
+    """使用当前 Config 构建 Anthropic 客户端"""
+    return anthropic.Anthropic(
+        api_key=Config.ANTHROPIC_API_KEY,
+        base_url=Config.ANTHROPIC_BASE_URL,
+        timeout=Config.API_TIMEOUT,
+        max_retries=Config.API_MAX_RETRIES,
+    )
+
+
 @app.route('/api/search', methods=['GET', 'POST'])
 def search():
-    """
-    处理OCS发送的搜索请求，使用 DeepSeek API 生成答案
-    GET请求: 从URL参数获取问题
-    POST请求: 从请求体获取问题
-
-    参数:
-        title: 问题内容
-        type: 问题类型 (single-单选, multiple-多选, judgement-判断, completion-填空)
-        options: 选项内容
-
-    返回:
-        成功: {'code': 1, 'question': '问题', 'answer': 'AI生成的答案'}
-        失败: {'code': 0, 'msg': '错误信息'}
-    """
+    """处理OCS发送的搜索请求，使用 AI API 生成答案"""
     t_start = time.time()
 
     if not verify_access_token(request):
         return jsonify({'code': 0, 'msg': '无效的访问令牌'}), 403
 
     try:
-        # 根据请求方法获取问题内容
         if request.method == 'GET':
             question = request.args.get('title', '')
             question_type = request.args.get('type', '')
             options = request.args.get('options', '')
-        else:  # POST
+        else:
             content_type = request.headers.get('Content-Type', '')
-
             if 'application/json' in content_type:
                 data = request.get_json(silent=True)
                 if data is None:
@@ -129,7 +117,6 @@ def search():
 
         logger.info(f"接收到问题: '{question[:80]}...' (类型: {question_type})")
 
-        # 检查缓存中是否有此问题的答案
         if cache is not None:
             cached_answer = cache.get(question, question_type, options)
             if cached_answer:
@@ -137,10 +124,8 @@ def search():
                 logger.info(f"从缓存获取答案 (耗时: {elapsed:.2f}秒)")
                 return jsonify(format_answer_for_ocs(question, cached_answer))
 
-        # 构建发送给 AI 的提示
         prompt = parse_question_and_options(question, options, question_type)
 
-        # 调用 AI API
         response = client.messages.create(
             model=Config.ANTHROPIC_MODEL,
             temperature=Config.TEMPERATURE,
@@ -151,7 +136,6 @@ def search():
             ],
         )
 
-        # 安全获取 AI 响应内容
         if response.content and len(response.content) > 0:
             first_block = response.content[0]
             if hasattr(first_block, 'text') and first_block.text:
@@ -163,14 +147,11 @@ def search():
             logger.warning("AI 返回空响应")
             return jsonify({'code': 0, 'msg': 'AI 未返回有效答案'})
 
-        # 处理答案格式
         processed_answer = extract_answer(ai_answer, question_type)
 
-        # 保存到缓存
         if cache is not None:
             cache.set(question, processed_answer, question_type, options)
 
-        # 保存问答记录
         current_time = datetime.now(timezone.utc)
         qa_records.append({
             'time': current_time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -205,15 +186,60 @@ def search():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """健康检查接口"""
-    return jsonify({
+    """健康检查接口（含完整 ccswitch 信息）"""
+    uptime_seconds = time.time() - start_time
+
+    result = {
         'status': 'ok',
         'message': 'AI题库服务运行正常',
         'version': _SERVER_VERSION,
         'config_source': Config.CONFIG_SOURCE,
         'cache_enabled': Config.ENABLE_CACHE,
+        'cache_size': len(cache) if cache is not None else 0,
         'model': Config.ANTHROPIC_MODEL,
-    })
+        'base_url': Config.ANTHROPIC_BASE_URL,
+        'uptime_seconds': round(uptime_seconds, 2),
+    }
+
+    if Config.CONFIG_SOURCE == 'ccswitch':
+        result['ccswitch'] = {
+            'raw_model': Config.CCSWITCH_RAW_MODEL,
+            'is_proxy': Config.CCSWITCH_IS_PROXY,
+            'model_sanitized': Config.CCSWITCH_RAW_MODEL != Config.ANTHROPIC_MODEL,
+        }
+        result['config_keys'] = list(Config.EXTRA_ENV.keys()) if Config.EXTRA_ENV else []
+
+    return jsonify(result)
+
+
+@app.route('/api/config/reload', methods=['POST'])
+def config_reload():
+    """运行时重新加载 ccswitch 配置"""
+    if not verify_access_token(request):
+        return jsonify({'success': False, 'message': '无效的访问令牌'}), 403
+
+    success = reload_config()
+
+    if success:
+        global client
+        client = build_ai_client()
+        logger.info(f"配置已重新加载: model={Config.ANTHROPIC_MODEL}, base_url={Config.ANTHROPIC_BASE_URL}")
+        return jsonify({
+            'success': True,
+            'message': '配置已从 ccswitch 重新加载',
+            'config_source': Config.CONFIG_SOURCE,
+            'model': Config.ANTHROPIC_MODEL,
+            'base_url': Config.ANTHROPIC_BASE_URL,
+            'raw_model': Config.CCSWITCH_RAW_MODEL,
+        })
+    else:
+        logger.warning("配置重载回退到 .env")
+        return jsonify({
+            'success': True,
+            'message': 'ccswitch 不可用，已回退到 .env 配置',
+            'config_source': Config.CONFIG_SOURCE,
+            'model': Config.ANTHROPIC_MODEL,
+        })
 
 
 @app.route('/api/cache/clear', methods=['POST'])
@@ -240,22 +266,37 @@ def get_stats():
         'config_source': Config.CONFIG_SOURCE,
         'uptime': time.time() - start_time,
         'model': Config.ANTHROPIC_MODEL,
+        'base_url': Config.ANTHROPIC_BASE_URL,
         'cache_enabled': Config.ENABLE_CACHE,
         'cache_size': len(cache) if cache is not None else 0,
         'qa_records_count': len(qa_records),
     }
+
+    if Config.CONFIG_SOURCE == 'ccswitch':
+        stats['ccswitch_raw_model'] = Config.CCSWITCH_RAW_MODEL
+        stats['ccswitch_is_proxy'] = Config.CCSWITCH_IS_PROXY
 
     return jsonify(stats)
 
 
 @app.route('/dashboard', methods=['GET'])
 def dashboard():
-    """仪表盘 - 显示问答记录和系统状态"""
+    """仪表盘 - 显示问答记录和系统状态（含 ccswitch 详情）"""
     uptime_seconds = time.time() - start_time
     days = int(uptime_seconds // 86400)
     hours = int((uptime_seconds % 86400) // 3600)
     minutes = int((uptime_seconds % 3600) // 60)
     uptime_str = f"{days}天{hours}小时{minutes}分钟"
+
+    ccswitch_info = None
+    if Config.CONFIG_SOURCE == 'ccswitch':
+        ccswitch_info = {
+            'raw_model': Config.CCSWITCH_RAW_MODEL,
+            'sanitized_model': Config.ANTHROPIC_MODEL,
+            'is_proxy': Config.CCSWITCH_IS_PROXY,
+            'base_url': Config.ANTHROPIC_BASE_URL,
+            'extra_env': Config.EXTRA_ENV,
+        }
 
     return render_template(
         'dashboard.html',
@@ -266,6 +307,7 @@ def dashboard():
         model=Config.ANTHROPIC_MODEL,
         uptime=uptime_str,
         records=qa_records,
+        ccswitch_info=ccswitch_info,
     )
 
 
@@ -289,7 +331,7 @@ def docs():
         return f"""
         <html>
             <head>
-                <title>AI题库服务 - API文档</title>
+                <title>AI题库服务 - API文档 v{_SERVER_VERSION}</title>
                 <style>
                     body {{ font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }}
                     h1, h2, h3 {{ color: #2c3e50; }}
@@ -312,7 +354,7 @@ def docs():
         return f"""
         <html>
             <head>
-                <title>AI题库服务 - API文档</title>
+                <title>AI题库服务 - API文档 v{_SERVER_VERSION}</title>
                 <style>
                     body {{ font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }}
                     h1 {{ color: #333; }}
@@ -322,7 +364,7 @@ def docs():
             </head>
             <body>
                 <div class="container">
-                    <h1>AI题库服务 - API文档</h1>
+                    <h1>AI题库服务 - API文档 v{_SERVER_VERSION}</h1>
                     <pre>{content}</pre>
                 </div>
             </body>

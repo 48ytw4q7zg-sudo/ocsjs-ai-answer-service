@@ -43,8 +43,14 @@ def setup_logger(name: str, log_dir: str = "logs",
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
-    # 控制台处理器
-    ch = logging.StreamHandler(sys.stdout)
+    # 控制台处理器（Windows 控制台 UTF-8 编码兼容）
+    if sys.platform == 'win32':
+        import io
+        utf8_stream = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8',
+                                        errors='replace', line_buffering=True)
+        ch = logging.StreamHandler(utf8_stream)
+    else:
+        ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(level)
     ch.setFormatter(fmt)
     logger.addHandler(ch)
