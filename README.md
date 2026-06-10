@@ -2,7 +2,7 @@
 
 基于 Anthropic 兼容协议的智能题库服务，专为 [OCS (Online Course Script)](https://github.com/ocsjs/ocsjs) 设计，通过 AI 自动回答题目。实现与 OCS AnswererWrapper 兼容的 API 接口，集成 ccswitch 动态配置，无需手动管理 API 密钥。
 
-**版本**: 2.1.0
+**版本**: 2.2.0
 **作者**: QXW
 
 ---
@@ -33,6 +33,10 @@
 - **数据统计**: `/dashboard` 仪表盘实时监控服务状态、ccswitch 配置详情和问答历史
 - **Web UI**: Bootstrap 5 响应式界面，支持移动端，XSS 防护
 - **日志轮转**: RotatingFileHandler 自动按 10MB 切割，保留 5 个历史文件，Windows 控制台 UTF-8 兼容
+- **增强提示词** (v2.2.0): 题目+选项+题型指令强制合并为一条完整提示词，AI 基于实际选项作答
+- **防混淆策略** (v2.2.0): 提示词明确告知选项顺序可能被打乱，要求 AI 比对选项内容而非凭记忆
+- **空答案自动重试** (v2.2.0): AI 返回空文本时自动降温(T=0.3)重试一次
+- **全题型答案清洗** (v2.2.0): 自动去除"答案："等前缀、选项字母前缀(B./A.)、尾标点；判断题中英文标准化
 - **Docker 部署**: 提供 Dockerfile + docker-compose.yml，支持容器化运行
 
 ---
@@ -370,8 +374,9 @@ Flask Web 服务主文件，是整个系统的中枢。
 | `start_time` | `float` | `time.time()` | 服务启动时间戳 |
 | `SYSTEM_PROMPT` | `str` | 见代码 | AI 系统提示词，定义答题格式规范 |
 | `MAX_RECORDS` | `int` | `100` | 最大历史记录数 |
-| `_SERVER_VERSION` | `str` | `"2.1.0"` | 服务版本号常量 |
+| `_SERVER_VERSION` | `str` | `"2.2.0"` | 服务版本号常量 |
 | `build_ai_client()` | `() -> Anthropic` | — | **v2.1.0 新增**: 用当前配置重建客户端 |
+| `_call_ai()` | `(prompt, max_tokens=300) -> str\|None` | — | **v2.2.0 新增**: 调用 AI API，空文本自动重试+降温
 
 **路由表**:
 
@@ -406,18 +411,19 @@ Flask Web 服务主文件，是整个系统的中枢。
   │      命中 → 直接返回缓存答案（跳过 AI 调用）
   │
   ├─ 5. parse_question_and_options() 构建提示词
-  │      (utils.py: 问题 + 题型提示 + 选项 + 格式指令)
+  │      (v2.2.0 增强: 题型标签+题干+选项+_build_instructions 合并)
   │
-  ├─ 6. client.messages.create() 调用 AI API
+  ├─ 6. _call_ai() 调用 AI API (v2.2.0 新增)
+  │      正常调用 → 空文本 → 降温(temperature=0.3)重试 → 仍空 → 返回 None
   │      {model, temperature, max_tokens, system, messages}
   │      自动重试 (max_retries=2)，超时 (timeout=30s)
   │      model 已自动净化（v2.1.0）
   │
   ├─ 7. 提取文本 → response.content[0].text.strip()
-  │      空响应 → code:0
+  │      空响应 → _call_ai 自动重试 (v2.2.0)
   │
-  ├─ 8. extract_answer() 后处理格式
-  │      (utils.py: 多选 4 模式检测 + # 标准化)
+  ├─ 8. extract_answer() 后处理格式 (v2.2.0 增强)
+  │      去答案前缀 + 去尾标点 + 单选去选项字母 + 判断标准化 + 多选 # 分隔
   │
   ├─ 9. cache.set() 写入缓存
   │
@@ -1163,6 +1169,25 @@ docker-compose up -d
 ---
 
 ## 版本变更
+
+### v2.2.0 (2026-06-10) — 提示词深度增强 + 全题型答案清洗
+- **新增**: 增强提示词构建 (`parse_question_and_options` + `_build_instructions`)
+  - 题目+选项+题型指令强制合并，AI 始终看到完整上下文
+  - 明确告知 AI 选项顺序可能被打乱，必须基于实际选项内容判断
+  - 分别针对有选项/无选项、不同题型生成精确指令
+- **新增**: 空答案自动重试 (`_call_ai`)
+  - 第 1 次失败后降温(temperature=0.3)再试一次
+  - 统一异常捕获（APIStatusError/APITimeoutError/APIConnectionError）
+- **新增**: 全题型答案清洗 (`extract_answer`)
+  - 自动去除「答案：」「答案是」「Answer:」等前缀
+  - 自动去除尾部标点（。！；，）
+  - 单选：去除「B. 北京」→「北京」的选项字母前缀
+  - 判断：正确/对/true/√/yes→「正确」，错误/错/false/×/no→「错误」
+  - 多选：逗号/空格分隔的答案自动转 # 格式
+- **新增**: 详细日志（API 提示词、答案内容、是否有选项）
+- **修复**: `str | None` 类型注解改为 Python 3.7+ 兼容写法
+- **修复**: SYSTEM_PROMPT 与 _build_instructions 指令一致性对齐
+- **Q-CR 三轮审查**: R-07 类型注解/R-10 单选字母前缀/R-13 指令矛盾 全部修复
 
 ### v2.1.0 (2026-06-10) — ccswitch 深度集成优化
 - **新增**: 模型名自动净化 (`_sanitize_model_name()`) — 去除 `[1M]`/`[200K]` 等后缀
