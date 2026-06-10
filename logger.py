@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 日志工具模块
-提供统一的日志记录机制
+提供 RotatingFileHandler 轮转日志记录
 """
 import logging
 import os
@@ -9,65 +9,44 @@ import sys
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
-from config import Config
 
-class Logger:
-    """日志管理类"""
-    
-    def __init__(self, name, log_dir="logs"):
-        """
-        初始化日志记录器
-        
-        Args:
-            name: 日志记录器名称
-            log_dir: 日志文件保存目录
-        """
-        self.name = name
-        self.log_dir = log_dir
-        
-        # 创建日志目录
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-        
-        # 设置日志文件名，包含日期
-        today = datetime.now().strftime("%Y-%m-%d")
-        log_file = os.path.join(log_dir, f"{name}_{today}.log")
-        
-        # 创建日志记录器
-        self.logger = logging.getLogger(name)
-        self.logger.setLevel(getattr(logging, Config.LOG_LEVEL))
-        
-        # 如果已经添加了处理器，则不再添加
-        if self.logger.handlers:
-            return
-        
-        # 创建文件处理器，设置轮转，最大10MB，保留5个备份
-        file_handler = RotatingFileHandler(
-            log_file, 
-            maxBytes=10*1024*1024,  # 10MB
-            backupCount=5,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(getattr(logging, Config.LOG_LEVEL))
-        
-        # 创建控制台处理器
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(getattr(logging, Config.LOG_LEVEL))
-        
-        # 设置日志格式
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        file_handler.setFormatter(formatter)
-        console_handler.setFormatter(formatter)
-        
-        # 将处理器添加到记录器
-        self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
-    
-    def get_logger(self):
-        """获取日志记录器"""
-        return self.logger
+def setup_logger(name: str, log_dir: str = "logs",
+                 level: int = logging.INFO) -> logging.Logger:
+    """
+    创建并配置日志记录器。
 
-# 创建默认的应用日志记录器
-app_logger = Logger("ai_answer_service").get_logger()
+    - 控制台输出 (StreamHandler)
+    - 文件轮转输出 (RotatingFileHandler, 10MB, 保留5个)
+    """
+    os.makedirs(log_dir, exist_ok=True)
+
+    log_file = os.path.join(
+        log_dir, f"{name}_{datetime.now().strftime('%Y-%m-%d')}.log"
+    )
+
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+
+    # 幂等保护：避免重复添加 handler
+    if logger.handlers:
+        return logger
+
+    fmt = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+    # 文件处理器（轮转）
+    fh = RotatingFileHandler(
+        log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding='utf-8'
+    )
+    fh.setLevel(level)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+
+    # 控制台处理器
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(level)
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+
+    return logger

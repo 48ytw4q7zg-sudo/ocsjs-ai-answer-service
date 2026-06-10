@@ -20,10 +20,11 @@
 
 ## 功能特点
 
-- **AI 驱动**: 通过 ccswitch 代理或直接 API 调用生成智能回答
-- **ccswitch 集成**: 自动读取 `~/.claude/settings.json`，无需手动配置密钥
+- **AI 驱动**: 通过 ccswitch 代理或直连 API 调用生成智能回答
+- **ccswitch 集成**: 自动读取 `~/.claude/settings.json` 中的 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL` 等字段，无需手动配置密钥
+- **直连 API 支持**: ccswitch 离线时自动回退到 `.env` 配置，支持直连 DeepSeek 等 Anthropic 兼容 API
 - **OCS 兼容**: 完全兼容 OCS 的 AnswererWrapper 题库接口
-- **高性能**: 内存缓存（MD5 哈希键 + TTL 过期 + LRU 淘汰），快速响应
+- **高性能缓存**: 内存缓存（MD5 哈希键 + TTL 过期 + LRU 淘汰），快速响应
 - **安全可靠**: 支持 ACCESS_TOKEN 双重验证（Header `X-Access-Token` / URL `?token=`）
 - **多种题型**: 支持单选(single)、多选(multiple)、判断(judgement)、填空(completion)
 - **数据统计**: `/dashboard` 仪表盘实时监控服务状态和问答历史
@@ -59,13 +60,17 @@ pip install -r requirements.txt
 
 **方式一（推荐）：使用 ccswitch**
 
-如果已安装并运行 ccswitch，服务会自动读取 `~/.claude/settings.json` 中的代理配置，无需手动配置 `.env` 文件。直接启动即可：
+如果已安装并运行 ccswitch，服务会自动读取 `~/.claude/settings.json` 中的配置，无需手动配置 `.env` 文件。直接启动即可：
 
 ```bash
 python app.py
 ```
 
-启动日志会显示 `配置来源: ccswitch`。
+启动日志：
+```
+配置来源: ccswitch
+AI 模型: deepseek-v4-pro, Base URL: https://api.deepseek.com/anthropic
+```
 
 **方式二：手动配置 .env**
 
@@ -75,7 +80,7 @@ python app.py
 cp .env.example .env
 ```
 
-编辑 `.env` 文件，填写 API 密钥：
+编辑 `.env` 文件：
 
 ```
 ANTHROPIC_API_KEY=your_api_key_here
@@ -89,11 +94,9 @@ ANTHROPIC_MODEL=deepseek-v4-pro
 python app.py
 ```
 
-服务将默认运行在 `http://localhost:5000`
+服务默认运行在 `http://localhost:5000`
 
 ### 5. 在 OCS 中配置使用
-
-在 OCS 的自定义题库配置中添加如下配置：
 
 ```json
 [
@@ -129,7 +132,6 @@ ocsjs-ai-answer-service/
 ├── Dockerfile              # Docker 镜像构建文件
 ├── docker-compose.yml      # Docker Compose 编排文件
 ├── .env.example            # 环境变量配置模板
-├── .env                    # 实际环境变量 (gitignore, 不入库)
 ├── .gitignore              # Git 忽略规则
 ├── LICENSE                 # 许可证文件
 ├── api_docs.md             # API 文档 (Markdown)
@@ -151,84 +153,112 @@ Flask Web 服务主文件，是整个系统的中枢。
 
 **启动流程**:
 
-1. `logging.basicConfig()` 初始化全局日志格式（在导入 config 之前，确保 ccswitch 模块日志也能被捕获）
-2. `from config import Config` 触发配置加载（详见 config.py 章节）
-3. `logging.getLogger().setLevel(Config.LOG_LEVEL)` 根据配置调整日志级别
-4. 记录配置来源和模型信息
-5. `Flask(__name__)` 创建应用实例
-6. `CORS(app)` 启用跨域支持
-7. `SimpleCache(Config.CACHE_EXPIRATION)` 初始化缓存
-8. 检查 `ANTHROPIC_API_KEY` 是否存在，不存在则抛出 ValueError
-9. `anthropic.Anthropic(api_key=..., base_url=...)` 初始化 AI 客户端
+```
+1. logging.basicConfig() 初始化根 logger
+   └─ 在导入 config 之前执行，防止 ccswitch/config 等子模块产生 "No handler found" 警告
+
+2. from config import Config
+   └─ 触发 config.py 模块加载 → ccswitch 配置读取 → .env 回退
+
+3. from logger import setup_logger
+4. logger = setup_logger('ai_answer_service', level=LOG_LEVEL)
+   └─ 用 RotatingFileHandler 重新配置日志（控制台 + 文件轮转）
+
+5. Flask(__name__) + CORS(app)
+6. SimpleCache(Config.CACHE_EXPIRATION) 初始化缓存
+7. anthropic.Anthropic(api_key, base_url) 初始化 AI 客户端
+```
 
 **全局状态**:
 
-| 变量 | 类型 | 说明 |
-|------|------|------|
-| `client` | `anthropic.Anthropic` | Anthropic 兼容 API 客户端 |
-| `cache` | `SimpleCache` / `None` | 内存缓存实例（缓存关闭时为 None） |
-| `qa_records` | `deque(maxlen=100)` | 问答历史记录队列，自动淘汰最旧记录 |
-| `start_time` | `float` | 服务启动时间戳，用于计算 uptime |
-| `SYSTEM_PROMPT` | `str` | AI 系统提示词，约定答题格式规范 |
-| `MAX_RECORDS` | `int` | 最大记录数 = 100 |
+| 变量 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `client` | `anthropic.Anthropic` | — | Anthropic 兼容 API 客户端 |
+| `cache` | `SimpleCache` / `None` | — | 内存缓存实例（缓存关闭时为 None） |
+| `qa_records` | `deque(maxlen=100)` | — | 问答历史记录队列，自动淘汰最旧记录 |
+| `start_time` | `float` | `time.time()` | 服务启动时间戳 |
+| `SYSTEM_PROMPT` | `str` | 见代码 | AI 系统提示词，定义答题格式规范 |
+| `MAX_RECORDS` | `int` | `100` | 最大历史记录数 |
 
 **路由表**:
 
-| 路由 | 方法 | 函数 | 功能 | 访问令牌验证 |
+| 路由 | 方法 | 函数 | 功能 | 令牌验证 |
 |------|------|------|------|:---:|
 | `/` | GET | `index()` | 返回问答测试首页 `index.html` | — |
-| `/dashboard` | GET | `dashboard()` | 返回仪表盘页面 `dashboard.html`，计算 uptime 字符串 | — |
-| `/docs` | GET | `docs()` | 读取 `api_docs.md` 并用 `markdown` 库渲染为 HTML（未安装则纯文本） | — |
+| `/dashboard` | GET | `dashboard()` | 返回仪表盘页面（含系统信息 + DataTable 问答历史） | — |
+| `/docs` | GET | `docs()` | 读取 `api_docs.md` 并用 `markdown` 库渲染为 HTML | — |
 | `/api/search` | GET/POST | `search()` | 核心搜索接口，调用 AI 生成答案 | ✓ |
-| `/api/health` | GET | `health_check()` | 健康检查，返回状态/版本/配置来源/缓存状态/模型 | — |
+| `/api/health` | GET | `health_check()` | 健康检查（状态/版本/配置来源/缓存/模型） | — |
 | `/api/cache/clear` | POST | `clear_cache()` | 清除全部缓存 | ✓ |
 | `/api/stats` | GET | `get_stats()` | 返回服务统计（版本/uptime/模型/缓存/记录数） | ✓ |
 
-**`search()` 请求处理流程（核心链路）**:
+**`search()` 请求处理全链路**:
 
 ```
 客户端请求
   │
-  ├─ 1. verify_access_token() — 验证 X-Access-Token 头或 ?token 参数
+  ├─ 1. verify_access_token() 令牌验证
   │
-  ├─ 2. 根据请求方法提取参数:
-  │      GET  → request.args.get('title', ''), request.args.get('type', ''), request.args.get('options', '')
+  ├─ 2. 参数提取（按请求方法）
+  │      GET  → request.args.get()
   │      POST → Content-Type: application/json → request.get_json()
-  │      POST → 其他 Content-Type → request.form (表单数据)
+  │      POST → 其他 Content-Type → request.form
   │
-  ├─ 3. 参数校验 — title 为空返回 code:0 + "未提供问题内容"
+  ├─ 3. 参数校验 → title 为空返回 code:0 + 403
   │
-  ├─ 4. 缓存查询 — cache.get(question, question_type, options)
+  ├─ 4. 缓存查询 → cache.get(question, type, options)
   │      命中 → 直接返回缓存答案（跳过 AI 调用）
   │
-  ├─ 5. parse_question_and_options() — 构建 AI 提示词
-  │      (utils.py: 拼接题型提示 + 选项内容)
+  ├─ 5. parse_question_and_options() 构建提示词
+  │      (utils.py: 问题 + 题型提示 + 选项 + 格式指令)
   │
-  ├─ 6. client.messages.create() — 调用 AI API
-  │      参数: model, temperature, max_tokens, system=SYSTEM_PROMPT, messages=[{"role":"user","content":prompt}]
+  ├─ 6. client.messages.create() 调用 AI API
+  │      {model, temperature, max_tokens, system, messages}
   │
-  ├─ 7. 提取响应文本 — response.content[0].text.strip()
+  ├─ 7. 提取文本 → response.content[0].text.strip()
   │
-  ├─ 8. extract_answer() — 后处理答案格式
-  │      (utils.py: 多选答案自动转换为 # 分隔格式)
+  ├─ 8. extract_answer() 后处理格式
+  │      (utils.py: 多选 4 模式检测 + # 标准化)
   │
-  ├─ 9. cache.set() — 写入缓存
+  ├─ 9. cache.set() 写入缓存
   │
-  ├─ 10. qa_records.append() — 记录问答历史
+  ├─ 10. qa_records.append() 记录历史
   │
-  └─ 11. format_answer_for_ocs() → 返回 JSON {code:1, question:..., answer:...}
+  └─ 11. format_answer_for_ocs() 返回 JSON
+         {code:1, question:..., answer:...}
 ```
 
-**`docs()` 渲染逻辑**:
+**`verify_access_token()` 令牌验证逻辑**:
+
+```python
+def verify_access_token(req):
+    if Config.ACCESS_TOKEN:                              # 配置了令牌才验证
+        token = req.headers.get('X-Access-Token') \      # 优先 HTTP Header
+             or req.args.get('token')                    # 回退 URL 参数
+        if not token or token != Config.ACCESS_TOKEN:
+            return False
+    return True
+```
+
+**`docs()` Markdown 渲染**:
 
 ```
 读取 api_docs.md
   │
-  ├─ try: import markdown → markdown.markdown(content, extensions=['tables'])
-  │      返回内嵌 CSS 的完整 HTML 页面
+  ├─ markdown 库可用 → markdown.markdown(content, extensions=['tables'])
+  │                    返回内嵌 CSS 的完整 HTML 页面
   │
-  └─ except ImportError:
-         返回 <pre>{content}</pre> 纯文本页面
+  └─ markdown 库不可用 → <pre>{content}</pre> 纯文本
+```
+
+**`dashboard()` uptime 计算**:
+
+```python
+uptime_seconds = time.time() - start_time
+days = int(uptime_seconds // 86400)
+hours = int((uptime_seconds % 86400) // 3600)
+minutes = int((uptime_seconds % 3600) // 60)
+uptime_str = f"{days}天{hours}小时{minutes}分钟"
 ```
 
 **启动入口**:
@@ -248,208 +278,234 @@ if __name__ == '__main__':
 
 ```
 1. from dotenv import load_dotenv
-2. load_dotenv(override=True)  — 强制覆盖方式加载 .env 到 os.environ
-3. _ccswitch = get_ccswitch_config()  — 调用 ccswitch.py 读取 settings.json
+2. load_dotenv(override=True)  ← 强制覆盖模式，确保 .env 值覆盖系统环境变量
+3. _ccswitch = get_ccswitch_config()  ← 调用 ccswitch.py
 4. class Config:
-     if _ccswitch 有效:
-         使用 ccswitch 的 api_key / base_url / model
-         CONFIG_SOURCE = 'ccswitch'
+     if _ccswitch 存在且 api_key 非空:
+         ANTHROPIC_API_KEY = _ccswitch['api_key']
+         ANTHROPIC_BASE_URL = _ccswitch['base_url']
+         ANTHROPIC_MODEL     = _ccswitch['model']
+         CONFIG_SOURCE       = 'ccswitch'
      else:
-         从 os.getenv() 读取 ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL
-         CONFIG_SOURCE = '.env'
+         从 os.getenv() 读取 ANTHROPIC_API_KEY/BASE_URL/MODEL
+         CONFIG_SOURCE       = '.env'
 ```
 
-**Config 类属性**:
+**`Config` 类属性全表**:
 
 | 属性 | 环境变量 | 默认值 | 说明 |
 |------|---------|--------|------|
 | `HOST` | `HOST` | `"0.0.0.0"` | Flask 监听地址 |
-| `PORT` | `PORT` | `5000` | 监听端口 |
-| `DEBUG` | `DEBUG` | `True` | Flask 调试模式 |
-| `ANTHROPIC_API_KEY` | 优先 ccswitch, 回退 `ANTHROPIC_API_KEY` | — | AI API 密钥（启动时必填） |
-| `ANTHROPIC_BASE_URL` | 优先 ccswitch, 回退 `ANTHROPIC_BASE_URL` | `"https://api.deepseek.com/anthropic"` | AI API 地址 |
-| `ANTHROPIC_MODEL` | 优先 ccswitch, 回退 `ANTHROPIC_MODEL` | `"deepseek-v4-pro"` | 请求的模型名称 |
-| `CONFIG_SOURCE` | — | 动态 | 配置来源标识（`"ccswitch"` 或 `".env"`） |
+| `PORT` | `PORT` | `5000` | 监听端口（int） |
+| `DEBUG` | `DEBUG` | `True` | Flask 调试模式（bool） |
+| `ANTHROPIC_API_KEY` | 优先 ccswitch; 回退 `ANTHROPIC_API_KEY` | `""` | AI API 密钥 |
+| `ANTHROPIC_BASE_URL` | 优先 ccswitch; 回退 `ANTHROPIC_BASE_URL` | `"https://api.deepseek.com/anthropic"` | API 地址 |
+| `ANTHROPIC_MODEL` | 优先 ccswitch; 回退 `ANTHROPIC_MODEL` | `"deepseek-v4-pro"` | 模型名称 |
+| `CONFIG_SOURCE` | — | 动态 | `"ccswitch"` 或 `".env"` |
 | `LOG_LEVEL` | `LOG_LEVEL` | `"INFO"` | 日志级别 |
 | `ACCESS_TOKEN` | `ACCESS_TOKEN` | `None` | 访问令牌（None=不验证） |
-| `MAX_TOKENS` | `MAX_TOKENS` | `500` | AI 响应最大 token 数 |
-| `TEMPERATURE` | `TEMPERATURE` | `0.7` | AI 生成温度参数 |
-| `ENABLE_CACHE` | `ENABLE_CACHE` | `True` | 是否启用缓存 |
-| `CACHE_EXPIRATION` | `CACHE_EXPIRATION` | `86400` | 缓存过期时间（秒，默认 24h） |
+| `MAX_TOKENS` | `MAX_TOKENS` | `500` | AI 响应最大 token 数（int） |
+| `TEMPERATURE` | `TEMPERATURE` | `0.7` | AI 生成温度（float） |
+| `ENABLE_CACHE` | `ENABLE_CACHE` | `True` | 是否启用缓存（bool） |
+| `CACHE_EXPIRATION` | `CACHE_EXPIRATION` | `86400` | 缓存过期秒数（int，默认 24h） |
 
 ---
 
 #### 3. `ccswitch.py` — ccswitch 配置读取模块
 
-从 Claude Code 的 `settings.json` 中读取 ccswitch 代理配置，实现 API 密钥动态获取。
+从 Claude Code 的 `settings.json` 读取 API 配置。**同时支持 ccswitch 本地代理（127.0.0.1:15721）和直连 API（如 api.deepseek.com）两种模式。**
 
-**核心常量**:
+**核心函数**:
 
 ```python
-CCSWITCH_DEFAULT_HOST = "127.0.0.1"
-CCSWITCH_DEFAULT_PORT = 15721
+_find_settings_path()           # 辅助: 查找 ~/.claude/settings.json 或 settings.local.json
+get_ccswitch_config()           # 主入口: 读取并解析配置
+_get_model_by_selection()       # 辅助: 按当前选定模型取名称
 ```
 
-**函数调用链**:
+**`get_ccswitch_config()` 完整流程**:
 
 ```
-get_ccswitch_config()                      # 主入口
-  │
-  ├─ _find_settings_path()                 # 查找配置文件
-  │     检查 ~/.claude/settings.json
-  │     检查 ~/.claude/settings.local.json
-  │     返回第一个存在的路径，不存在返回 None
-  │
-  └─ _is_ccswitch_proxy(base_url)          # 判断是否为 ccswitch 代理
-        检查 "127.0.0.1:15721" 或 "localhost:15721" 是否在 base_url 中
-```
+1. _find_settings_path()
+   └─ 先检查 ~/.claude/settings.json
+   └─ 再检查 ~/.claude/settings.local.json
+   └─ 均不存在 → return None
 
-**`get_ccswitch_config()` 详细流程**:
-
-```
-1. 调用 _find_settings_path() 找配置文件
-   └─ 未找到 → return None (回退到 .env)
-
-2. 读取 JSON 文件
-   └─ JSON 解析/IO 异常 → return None
+2. json.load(f) 读取文件
+   └─ JSONDecodeError / IOError → return None
 
 3. 读取 settings['env'] 字典
-   └─ 不是 dict → return None
+   └─ 不是 dict 或为空 → return None
 
-4. 读取 env['ANTHROPIC_BASE_URL']
-   └─ 为空 或 不是 ccswitch 代理地址 → return None
+4. 读取 env['ANTHROPIC_AUTH_TOKEN'] 和 env['ANTHROPIC_BASE_URL']
+   └─ 任一为空 → return None
 
-5. 根据 settings['model'] 选择模型:
-   'opus'   → 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME'
-   'sonnet' → 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME'
-   'haiku'  → 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME'
-   其他     → 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME'
+5. 模型选择（三级优先级）：
+   ① env['ANTHROPIC_MODEL']               ← 通用模型名（DeepSeek 场景用这个）
+   ② _get_model_by_selection()             ← 按 settings['model'] 选专用名称
+      'opus'   → env['ANTHROPIC_DEFAULT_OPUS_MODEL_NAME']
+      'sonnet' → env['ANTHROPIC_DEFAULT_SONNET_MODEL_NAME']
+      'haiku'  → env['ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME']
+   ③ 'deepseek-v4-pro'                     ← 硬回退
 
-6. 读取对应的模型名称 env[model_key]
-   └─ 空值 → 回退 'deepseek-v4-pro'
+6. 识别代理类型（日志用）：
+   is_local = '127.0.0.1' in base_url or 'localhost' in base_url
+   tag = 'ccswitch代理' if is_local else '直连'
 
-7. 读取 env['ANTHROPIC_AUTH_TOKEN']
-   └─ 空值 → return None
+7. 返回 {'api_key': ..., 'base_url': ..., 'model': ...}
+```
 
-8. 返回 {'api_key': ..., 'base_url': ..., 'model': ...}
+**用户 ccswitch 配置匹配验证**（基于你提供的 settings.json）：
+
+```
+env.ANTHROPIC_AUTH_TOKEN  = "sk-xxx...xxx"                         ✓ 非空
+env.ANTHROPIC_BASE_URL    = "https://api.deepseek.com/anthropic"   ✓ 非空（直连模式）
+env.ANTHROPIC_MODEL       = "deepseek-v4-pro"                     ✓ 优先命中
+→ 返回: {api_key, base_url, model="deepseek-v4-pro"}
 ```
 
 ---
 
 #### 4. `utils.py` — 工具函数模块
 
-包含 3 个纯函数 + 1 个类。
+`from __future__ import annotations` 确保 Python 3.7+ 兼容。
 
 ##### `class SimpleCache` — 内存缓存
 
-基于 Python 字典的轻量级缓存，核心特点：
+基于 Python 字典的轻量级缓存。MD5 哈希键 + TTL 过期 + LRU 淘汰。
 
-- **MD5 哈希键**: `_generate_key()` 对 `question|type|options` 拼接串做 MD5 哈希，确保键长度恒定
-- **TTL 过期**: `get()` 检查 `time.time() - timestamp < expiration`，过期自动删除
-- **LRU 淘汰**: `set()` 在超过 `max_size` 时删除时间戳最旧的条目
-- **容量限制**: 默认 `max_size=10000`
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `expiration_seconds` | `86400` | 24 小时过期 |
+| `max_size` | `10000` | 最大缓存条目 |
 
-| 方法 | 参数 | 返回值 | 说明 |
-|------|------|--------|------|
-| `__init__` | `expiration_seconds=86400, max_size=10000` | — | 24h 过期，最多 10000 条 |
-| `__len__` | — | `int` | 当前缓存条目数 |
-| `_generate_key` | `question, question_type, options` | `str` (MD5 hex) | 生成缓存键 |
-| `get` | `question, question_type="", options=""` | `str` / `None` | 查询缓存，过期自动删除返回 None |
-| `set` | `question, answer, question_type="", options=""` | `None` | 写入缓存，超出容量时淘汰最旧条目 |
-| `clear` | — | `None` | 清空全部缓存 |
-| `remove_expired` | — | `int` | 批量删除过期条目，返回删除数量 |
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `__init__` | `(expiration_seconds, max_size)` | 初始化缓存字典 |
+| `__len__` | `() -> int` | 返回当前条目数 |
+| `_generate_key` | `(question, type, options) -> str` | MD5(`"q|type|opts"`) 生成固定长度键 |
+| `get` | `(question, type="", options="") -> str\|None` | 查询缓存，过期返回 None 并删除 |
+| `set` | `(question, answer, type="", options="") -> None` | 写入缓存，超容量时删除最旧条目 |
+| `clear` | `() -> None` | 清空全部缓存 |
+| `remove_expired` | `() -> int` | 批量删除过期条目，返回删除数量 |
+
+**TTL 过期策略**:
+
+```python
+def get(self, question, question_type, options):
+    key = MD5(f"{question}|{question_type}|{options}")
+    ts, value = self.cache[key]
+    if time.time() - ts < self.expiration:  # 未过期
+        return value
+    del self.cache[key]  # 过期自动删除
+    return None
+```
+
+**LRU 淘汰策略**:
+
+```python
+def set(self, question, answer, question_type, options):
+    if len(self.cache) >= self.max_size:
+        oldest = min(self.cache, key=lambda k: self.cache[k][0])  # 最小时间戳
+        del self.cache[oldest]
+    self.cache[key] = (time.time(), answer)
+```
 
 ##### `format_answer_for_ocs(question, answer)` → `Dict[str, Any]`
 
-将答案包装为 OCS 标准响应格式：`{'code': 1, 'question': question, 'answer': answer}`
+包装为 OCS 标准格式：`{'code': 1, 'question': question, 'answer': answer}`。
 
 ##### `parse_question_and_options(question, options, question_type)` → `str`
 
-构建发送给 AI 的完整提示词。拼接逻辑：
+构建 AI 提示词。拼接三段式结构：
 
 ```
-"问题: {question}\n"
-+ 题型提示（从 type_prompts 字典按 question_type 映射）
-+ "选项:\n{options}\n"  (仅当 options 非空)
-+ "请直接给出答案，不要解释。"
+问题: {question}
+{题型提示行 — 从 _TYPE_HINTS 字典映射}
+选项:\n{options}        (仅当 options 非空)
+请直接给出答案，不要解释。
 ```
 
-`type_prompts` 映射：
+**`_TYPE_HINTS` 映射**:
 
 | type | 提示文本 |
 |------|---------|
-| `single` | `"这是一道单选题。"` |
-| `multiple` | `"这是一道多选题，答案请用#符号分隔。"` |
-| `judgement` | `"这是一道判断题，需要回答：正确/对/true/√ 或者 错误/错/false/×。"` |
-| `completion` | `"这是一道填空题。"` |
+| `single` | `这是一道单选题。` |
+| `multiple` | `这是一道多选题，答案请用#号分隔选项。` |
+| `judgement` | `这是一道判断题，需要回答：正确/对/true/√ 或者 错误/错/false/×。` |
+| `completion` | `这是一道填空题。` |
 
 ##### `extract_answer(ai_response, question_type)` → `str`
 
-从 AI 原始响应中提取和格式化答案。仅对多选题做特殊处理：
+AI 答案后处理。**仅多选题做格式转换**。
 
 ```
-1. 非多选 → 直接返回原始文本
+非多选 → 直接返回原始文本
 
-2. 多选处理（3 种模式）:
-   模式1: 文本中已包含 '#' → 直接返回
-   模式2: 连续选项字母 "ABC" 或 "A B C" → 转换为 "A#B#C"
-   模式3: 按行扫描 ≤8 字符的行 → 识别纯字母组合 → 转换为 # 分隔
-   无法匹配任何模式 → 返回原始文本
+多选处理:
+  ├─ text.strip() 为空 → 返回空
+  ├─ 包含 '#' → _normalize_hash_separated() 标准化
+  └─ 不含 '#' → _detect_letters() 检测选项字母
+        ├─ 模式1: 连续字母 "ABC" → "A#B#C"
+        ├─ 模式2: 按行扫描 ≤8 字符的行 → 纯字母行 → # 分隔
+        ├─ 模式3: 提取所有 A-H 字母 → 去重排序 → # 分隔
+        └─ 均不匹配 → 返回原始文本
 ```
+
+##### `_normalize_hash_separated(text)` → `str`
+
+标准化已有 `#` 分隔符的答案。对每个分段：
+- 单字母 → 直接保留大写
+- 多字符 → 取首字母（若首字母是 A-H）
+
+##### `_detect_letters(text)` → `Optional[str]`
+
+从文本中检测选项字母。三种正则模式依次尝试。
 
 ---
 
 #### 5. `logger.py` — 日志模块
 
-提供 `Logger` 类和自动初始化的 `app_logger` 实例。
+通过 `setup_logger()` 函数创建带轮转的日志记录器。
 
-**`class Logger`**:
-
-| 参数 | 说明 |
-|------|------|
-| `name` | 日志记录器名称 |
-| `log_dir` | 日志目录，默认 `"logs"` |
-
-**初始化流程**:
-
-```
-1. os.makedirs(log_dir, exist_ok=True)  — 创建日志目录
-2. 日志文件名: logs/{name}_{YYYY-MM-DD}.log
-3. logging.getLogger(name)  — 获取/创建 logger
-4. 检查 handler 是否已存在（幂等性保护）
-5. RotatingFileHandler:
-     - maxBytes=10MB
-     - backupCount=5
-     - encoding='utf-8'
-6. StreamHandler(sys.stdout)  — 控制台输出
-7. 统一格式: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+```python
+setup_logger(name: str, log_dir: str = "logs",
+             level: int = logging.INFO) -> logging.Logger
 ```
 
-**模块级实例**: `app_logger = Logger("ai_answer_service").get_logger()`
+**内部机制**:
+
+```
+1. os.makedirs(log_dir, exist_ok=True)
+2. 日志文件: logs/{name}_{YYYY-MM-DD}.log
+3. 幂等保护: logger.handlers 已存在 → 直接返回（避免重复添加）
+4. RotatingFileHandler: maxBytes=10MB, backupCount=5, encoding='utf-8'
+5. StreamHandler(sys.stdout): 控制台同步输出
+6. 统一格式: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+```
+
+**调用关系**: `app.py` 第 27-28 行 `from logger import setup_logger; logger = setup_logger(...)`
 
 ---
 
 #### 6. `test_service.py` — 测试脚本
 
-独立测试脚本，用于验证服务是否正常运行。**提示**: 需要先启动 `app.py` 服务（默认端口 5000），再运行本脚本。
+独立测试脚本，用于验证服务是否正常运行。需先启动 `app.py`。
 
 **主流程**:
 
 ```
 main()
-  │
   ├─ test_health()  — GET /api/health
   │     └─ 失败 → sys.exit(1)
   │
   ├─ test_search("中国的首都是哪个城市？", "single", "A. 上海\nB. 北京\nC. 广州\nD. 深圳")
-  ├─ test_search("以下哪些是中国的一线城市？", "multiple", "A. 北京\nB. 上海\nC. 广州\nD. 深圳\nE. 成都\nF. 杭州")
+  ├─ test_search("以下哪些是中国的一线城市？", "multiple", "A. 北京\n...\nF. 杭州")
   ├─ test_search("地球是太阳系中第三颗行星。", "judgement")
   └─ test_search("《红楼梦》的作者是_______。", "completion")
 ```
 
-每个 `test_search()` 使用 `requests.get()` 发送 GET 请求到 `/api/search`，验证 `response.json()['code'] == 1`。
-
-可通过 `SERVICE_URL` 环境变量自定义服务地址。
+可通过 `SERVICE_URL` 环境变量自定义服务地址（默认 `http://localhost:5000`）。
 
 ---
 
@@ -459,24 +515,22 @@ main()
 
 **CDN 依赖**: Bootstrap 5.3 CSS + Axios
 
-**页面结构**:
+**DOM 结构**:
 
 ```
 导航栏 (.navbar-dark.bg-primary)
-  ├─ 品牌: "EduBrain AI"
-  ├─ 链接: /dashboard (统计面板)
-  └─ 链接: /docs (API文档)
+  └─ 品牌: "EduBrain AI" + 链接: /dashboard, /docs
 
 主内容区
-  ├─ 标题区: "EduBrain AI — 新一代智能题库服务"
-  ├─ 表单卡片 (.card)
-  │    ├─ textarea #question — 问题内容
-  │    ├─ select #question-type — 单选题/多选题/判断题/填空题
-  │    └─ textarea #options — 选项内容（每行一个）
-  ├─ 按钮: #search-btn "获取答案"
-  ├─ 加载动画: #loading (.spinner-border)
-  ├─ 结果卡片: #result — 显示 AI 回答
-  └─ OCS 配置示例: <pre> 代码块
+  ├─ 标题: "EduBrain AI — 新一代智能题库服务，兼容 OCS 题库接口"
+  ├─ 表单卡片 (.card.shadow-sm)
+  │    ├─ textarea #question   — 问题内容 (3行)
+  │    ├─ select #question-type — 未指定/单选/多选/判断/填空
+  │    └─ textarea #options    — 选项内容 (每行一个，4行)
+  ├─ 按钮 #search-btn (.btn-primary.btn-lg) "获取答案"
+  ├─ 加载动画 #loading (display:none) — .spinner-border + "AI正在思考"
+  ├─ 结果卡片 #result (display:none)  — #answer-content 显示答案
+  └─ OCS 配置示例 <pre> 代码块
 
 页脚: "EduBrain AI - 智能题库系统 v1.3.0"
 ```
@@ -485,17 +539,15 @@ main()
 
 ```
 #search-btn click
-  │
-  ├─ 1. 校验 question 非空 → 否则 alert('请输入问题内容')
-  ├─ 2. 显示 #loading / 隐藏 #result
-  ├─ 3. axios.get('/api/search', {params: {title, type, options}})
+  ├─ 校验 question 非空 → 否则 alert
+  ├─ 显示 #loading / 隐藏 #result
+  ├─ axios.get('/api/search', {params: {title, type, options}})
   │
   ├─ 成功:
-  │    code===1 → 显示问题+答案
-  │    code!==1 → 显示错误信息 msg
+  │    code===1 → 显示 问题 + 答案
+  │    code!==1 → 显示 error 样式 + 错误消息
   │
-  └─ 异常:
-       显示 "请求失败: " + error.message
+  └─ 异常 → 显示 error 样式 + error.message
 ```
 
 ---
@@ -504,40 +556,36 @@ main()
 
 **CDN 依赖**: Bootstrap 5.3 CSS/JS + jQuery 3.7.1 + DataTables 1.13.8 (BS5 + Responsive)
 
-**后端注入变量（Jinja2）**:
+**Jinja2 注入变量**:
 
-| 变量 | 说明 |
-|------|------|
-| `{{ version }}` | 版本号 "1.3.0" |
-| `{{ config_source }}` | 配置来源 "ccswitch" / ".env" |
-| `{{ cache_enabled }}` | 缓存启用状态 (bool) |
-| `{{ cache_size }}` | 当前缓存条目数 |
-| `{{ model }}` | 使用的 AI 模型名 |
-| `{{ uptime }}` | 运行时长 "X天X小时X分钟" |
-| `{{ records }}` | 问答记录列表 (deque) |
+| 变量 | 类型 | 说明 |
+|------|------|------|
+| `{{ version }}` | str | 版本号 ("1.3.0") |
+| `{{ config_source }}` | str | 配置来源 ("ccswitch" / ".env") |
+| `{{ cache_enabled }}` | bool | 缓存是否启用 |
+| `{{ cache_size }}` | int | 当前缓存条目数 |
+| `{{ model }}` | str | AI 模型名 |
+| `{{ uptime }}` | str | 运行时长 ("X天X小时X分钟") |
+| `{{ records }}` | deque | 问答历史记录 |
 
-**页面结构**:
+**DOM 结构**:
 
 ```
 导航栏 (同 index)
 
-系统信息卡片 (.card)
-  ├─ 版本
-  ├─ 配置来源
-  ├─ 缓存状态
-  ├─ 缓存数量
-  ├─ 使用模型
-  └─ 运行时长
+系统信息卡片 (.card-header.bg-primary)
+  ├─ 版本 / 配置来源 / 缓存状态
+  ├─ 缓存数量 / 使用模型 / 运行时长
 
-问答记录卡片 (.card)
-  ├─ 标题 + "清除缓存" 按钮
-  └─ DataTable 表格
+问答记录卡片
+  ├─ 标题 + "清除缓存" 按钮 (调用 /api/cache/clear POST)
+  └─ DataTable 表格 (#qa-records)
         ├─ 时间 (data-order 排序)
         ├─ 问题类型
-        ├─ 问题内容 (.text-truncate 截断 + title 悬停)
+        ├─ 问题内容 (.text-truncate + title 悬停提示)
         ├─ 选项 (.text-truncate)
         ├─ AI答案 (.text-truncate)
-        └─ 操作: "详情" 按钮
+        └─ 操作 → "详情" 按钮
 
 详情模态框 (.modal#detailModal)
   ├─ 问题 <pre>
@@ -545,11 +593,11 @@ main()
   └─ 答案 <pre>
 ```
 
-**前端 JS 交互**:
+**前端 JS**:
 
-- `clearCache()`: `fetch('/api/cache/clear', {method:'POST'})` → 成功后 `location.reload()`
-- `showDetail(question, options, answer)`: 填充模态框并 `new bootstrap.Modal(...).show()`
-- DataTable 配置: 响应式 + 按时间倒序 + 中文语言包 + 每页 10/25/50/100 可选
+- `clearCache()`: `fetch POST /api/cache/clear` → `location.reload()`
+- `showDetail(q, o, a)`: 填充模态框 → `new bootstrap.Modal().show()`
+- DataTable: responsive + 时间倒序 + 中文 + 10/25/50/100 分页
 
 ---
 
@@ -557,24 +605,22 @@ main()
 
 #### 9. `static/style.css` — 全局样式
 
-按功能区域组织的自定义样式表：
-
 | 选择器区域 | 说明 |
 |-----------|------|
 | `.navbar` / `.navbar-brand` | 导航栏阴影 + 粗体品牌名 |
 | `.card` / `.card-header` | 卡片阴影 + 无边框 |
-| `.table` / `.table-hover` | 表头背景色 + 悬停高亮 |
+| `.table` / `.table-hover` | 表头灰底 + 悬停高亮 |
 | `.form-group` / `textarea` | 表单间距 + 文本框最小高度 100px |
-| `.btn` | 按钮圆角 4px |
-| `.text-truncate` | 文本截断（默认最大 300px, 移动端 150px） |
+| `.btn` | 圆角 4px |
+| `.text-truncate` | 文本截断 (300px/移动端 150px) |
 | `.modal-content` | 无边框 + 深阴影 |
-| `.modal pre` | 模态框中 pre 样式：折行 + 浅灰背景 |
-| `.footer` | 页脚：浅灰背景 + 上边框 |
-| `.spinner` | 自定义旋转加载动画（`animation: spin 1s linear infinite`） |
-| `@keyframes spin` | 0→360deg 旋转 |
-| `.dataTables_*` | DataTables 搜索框/分页/信息栏微调 |
-| `@media (max-width: 768px)` | 移动端适配：缩小内边距/字号/截断宽度 |
-| `::-webkit-scrollbar` | 滚动条美化：8px 宽 + 灰色滑块 |
+| `.modal pre` | pre 自动折行 + 灰底 |
+| `.footer` | 灰底 + 上边框 `border-top` |
+| `.spinner` | 自定义旋转动画 |
+| `@keyframes spin` | 0→360deg |
+| `.dataTables_*` | 搜索框/分页/信息栏微调 |
+| `@media (max-width:768px)` | 移动端适配 |
+| `::-webkit-scrollbar` | 滚动条美化 (8px + 灰色滑块) |
 
 ---
 
@@ -582,92 +628,85 @@ main()
 
 #### 10. `.env.example` — 环境变量模板
 
-提供 8 个配置项的默认值和注释，复制为 `.env` 后使用：
+```ini
+HOST=0.0.0.0              # Flask 监听地址
+PORT=5000                  # 监听端口
+DEBUG=True                 # 调试模式
 
-```
-HOST=0.0.0.0          # Flask 监听地址
-PORT=5000              # 监听端口
-DEBUG=True             # 调试模式
-ANTHROPIC_API_KEY=...  # 回退 API 密钥（ccswitch 可用时忽略）
-ANTHROPIC_BASE_URL=... # 回退 API 地址
-ANTHROPIC_MODEL=...    # 回退模型名
-MAX_TOKENS=500         # AI 响应最大 token
-TEMPERATURE=0.7        # 生成温度
-ENABLE_CACHE=True      # 启用缓存
-CACHE_EXPIRATION=86400 # 缓存过期秒数
-# ACCESS_TOKEN=...     # 可选的访问令牌
+# 回退 API 配置（ccswitch 可用时忽略）
+ANTHROPIC_API_KEY=your-api-key-here
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_MODEL=deepseek-v4-pro
+
+# 响应参数
+MAX_TOKENS=500             # AI 最大输出 token
+TEMPERATURE=0.7            # 生成温度 (0-1)
+
+# 缓存设置
+ENABLE_CACHE=True          # 启用缓存
+CACHE_EXPIRATION=86400     # 过期时间(秒)
+
+# ACCESS_TOKEN=...         # 可选，API 访问令牌
 ```
 
 #### 11. `requirements.txt` — Python 依赖
 
 | 包 | 最低版本 | 用途 |
 |----|---------|------|
-| `flask` | ≥2.0.1 | Web 框架（路由/模板/请求处理） |
+| `flask` | ≥2.0.1 | Web 框架 |
 | `flask-cors` | ≥3.0.10 | 跨域支持 |
-| `python-dotenv` | ≥0.19.1 | .env 文件加载 |
-| `anthropic` | ≥0.39.0 | Anthropic 兼容 API 客户端（调用 DeepSeek） |
-| `gunicorn` | ≥20.1.0 | 生产级 WSGI 服务器 |
-| `markdown` | ≥3.3.0 | Markdown → HTML 转换（/docs 页面） |
+| `python-dotenv` | ≥0.19.1 | .env 加载 |
+| `anthropic` | ≥0.39.0 | Anthropic 兼容 API 客户端 |
+| `gunicorn` | ≥20.1.0 | 生产 WSGI 服务器 |
+| `markdown` | ≥3.3.0 | Markdown→HTML (可选) |
 
 #### 12. `Dockerfile` — Docker 镜像
 
-基于 `python:3.9-slim`，构建流程：
+基于 `python:3.9-slim`，7 步构建：
 
 ```
-1. WORKDIR /app
-2. COPY requirements.txt .
-3. apt-get 安装 curl（用于 healthcheck）
-4. pip install requirements.txt
-5. COPY . .  （全量复制）
-6. mkdir -p logs
+1. FROM python:3.9-slim
+2. WORKDIR /app
+3. COPY requirements.txt .
+4. RUN apt-get 安装 curl + pip install 依赖
+5. COPY . .
+6. RUN mkdir -p logs
 7. EXPOSE 5000
 8. CMD: gunicorn --bind 0.0.0.0:5000 --limit-request-line 16380 app:app
 ```
 
-`--limit-request-line 16380` 允许较大的 HTTP 请求行，应对长题干 URL 参数。
+`--limit-request-line 16380` 允许长题干 URL 参数通过。
 
 #### 13. `docker-compose.yml` — Docker Compose
 
 ```yaml
 services:
   ai-answer-service:
-    build: .                     # 从当前目录 Dockerfile 构建
+    build: .
     ports: "5000:5000"
-    volumes: ./logs:/app/logs    # 日志持久化
-    env_file: .env               # 注入环境变量
+    volumes: ./logs:/app/logs         # 日志持久化
+    env_file: .env                    # 环境变量注入
     extra_hosts:
-      - "host.docker.internal:host-gateway"  # 容器访问宿主机 ccswitch
+      - "host.docker.internal:host-gateway"  # 容器→宿主机 (访问 ccswitch)
     restart: unless-stopped
     healthcheck:
       test: curl -f http://localhost:5000/api/health
       interval: 30s / timeout: 10s / retries: 3
 ```
 
-**关键设计**: `extra_hosts` 配置让容器内可通过 `host.docker.internal` 访问宿主机的 ccswitch 代理（`127.0.0.1:15721`）。
+> 如果 ccswitch 监听在 `127.0.0.1:15721`，settings.json 中 `ANTHROPIC_BASE_URL` 需配置为 `http://host.docker.internal:15721/...`。
 
-#### 14. `.gitignore` — Git 忽略
+#### 14. `.gitignore`
 
 ```
 __pycache__/
 ```
 
-`.env` 文件已在仓库中但通过 git 管理策略控制（包含在 tracked files 但 `.env.example` 作为模板）。
-
 #### 15. `api_docs.md` — API 文档
 
-Markdown 格式的 API 文档，包含：
-- 搜索接口参数表（title/type/options）
-- 成功/失败响应示例
-- 健康检查/缓存清理/统计信息接口
-- OCS 配置示例
-- 安全设置说明
-- Multi-connect 域名注意事项
-
-被 `app.py` 的 `/docs` 路由读取并渲染为 HTML。
+Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染。包含搜索/健康/缓存/统计四个接口的参数表和示例、OCS 配置示例、安全设置说明。
 
 #### 16. `ocs_config_example.json` — OCS 配置示例
-
-JSON 数组，包含一个 OCS AnswererWrapper 配置对象：
 
 ```json
 [{
@@ -683,47 +722,40 @@ JSON 数组，包含一个 OCS AnswererWrapper 配置对象：
 
 ---
 
-## API 接口完整参考
+## API 接口参考
 
 ### 搜索接口
 
-**URL**: `/api/search`
-
-**方法**: `GET` / `POST`
-
-**认证**: ACCESS_TOKEN（可选，通过 `X-Access-Token` 头或 `?token=` 参数）
+| 属性 | 值 |
+|------|-----|
+| **URL** | `/api/search` |
+| **方法** | `GET` / `POST` |
+| **认证** | ACCESS_TOKEN（可选） |
 
 **参数**:
 
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|:----:|------|
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|:----:|------|
 | title | string | 是 | 题目内容 |
-| type | string | 否 | single(单选) / multiple(多选) / judgement(判断) / completion(填空) |
+| type | string | 否 | single / multiple / judgement / completion |
 | options | string | 否 | 选项文本 |
 
-**成功响应**:
+**成功** `{"code": 1, "question": "...", "answer": "..."}`
 
-```json
-{"code": 1, "question": "问题原文", "answer": "AI生成的答案"}
-```
-
-**失败响应**:
-
-```json
-{"code": 0, "msg": "错误描述"}
-```
+**失败** `{"code": 0, "msg": "..."}`
 
 ### 健康检查
 
-**URL**: `/api/health` | **方法**: `GET` | **认证**: 无
+**GET** `/api/health` · 无需认证
 
 ```json
-{"status": "ok", "message": "AI题库服务运行正常", "version": "1.3.0", "config_source": "ccswitch", "cache_enabled": true, "model": "deepseek-v4-pro"}
+{"status": "ok", "message": "AI题库服务运行正常", "version": "1.3.0",
+ "config_source": "ccswitch", "cache_enabled": true, "model": "deepseek-v4-pro"}
 ```
 
 ### 缓存清理
 
-**URL**: `/api/cache/clear` | **方法**: `POST` | **认证**: ACCESS_TOKEN
+**POST** `/api/cache/clear` · 需 ACCESS_TOKEN
 
 ```json
 {"success": true, "message": "缓存已清除"}
@@ -731,72 +763,51 @@ JSON 数组，包含一个 OCS AnswererWrapper 配置对象：
 
 ### 统计信息
 
-**URL**: `/api/stats` | **方法**: `GET` | **认证**: ACCESS_TOKEN
+**GET** `/api/stats` · 需 ACCESS_TOKEN
 
 ```json
-{"version": "1.3.0", "config_source": "ccswitch", "uptime": 12345.67, "model": "deepseek-v4-pro", "cache_enabled": true, "cache_size": 42, "qa_records_count": 42}
+{"version": "1.3.0", "config_source": "ccswitch", "uptime": 12345.67,
+ "model": "deepseek-v4-pro", "cache_enabled": true, "cache_size": 42,
+ "qa_records_count": 42}
 ```
 
 ---
 
 ## 页面路由
 
-| 路由 | 页面 | 功能 |
+| 路由 | 功能 | 说明 |
 |------|------|------|
-| `/` | 问答测试页 | 输入题目 → 调用 AI → 显示答案 |
-| `/dashboard` | 统计仪表盘 | 系统信息 + 问答历史 DataTable + 清除缓存 |
-| `/docs` | API 文档 | api_docs.md 渲染为 HTML（需 markdown 库，否则显示纯文本） |
+| `/` | 问答测试 | Bootstrap 5 表单 + Axios 调用 /api/search |
+| `/dashboard` | 统计面板 | Jinja2 渲染 + DataTables + 清除缓存按钮 |
+| `/docs` | API 文档 | api_docs.md 渲染为 HTML |
 
 ---
 
 ## 安全设置
 
-在 `.env` 中设置 `ACCESS_TOKEN`：
+在 `.env` 中设置 `ACCESS_TOKEN=your_token` 后：
 
-```
-ACCESS_TOKEN=your_secret_token_here
-```
+| 受保护接口 | 令牌传递方式 |
+|-----------|-------------|
+| `/api/search` | `X-Access-Token: <token>` 头 或 `?token=<token>` 参数 |
+| `/api/cache/clear` | 同上 |
+| `/api/stats` | 同上 |
 
-设置后，以下接口需要令牌验证（`/api/health` 和页面路由**不受**令牌保护）：
-
-- `GET/POST /api/search`
-- `POST /api/cache/clear`
-- `GET /api/stats`
-
-传递方式（二选一）：
-
-1. HTTP 头部: `X-Access-Token: your_secret_token_here`
-2. URL 参数: `?token=your_secret_token_here`
-
-验证逻辑位于 `app.py:verify_access_token()` 函数：
-
-```python
-def verify_access_token(req):
-    if Config.ACCESS_TOKEN:
-        token = req.headers.get('X-Access-Token') or req.args.get('token')
-        if not token or token != Config.ACCESS_TOKEN:
-            return False
-    return True
-```
+> `/`、`/dashboard`、`/docs`、`/api/health` 不受令牌保护。
 
 ---
 
-## Gunicorn 生产部署
+## 生产部署
 
 ```bash
+# Gunicorn
 gunicorn -w 4 -b 0.0.0.0:5000 app:app
-```
 
-Docker 部署（推荐）：
-
-```bash
+# Docker
 docker build -t ai-answer-service .
 docker run -p 5000:5000 --env-file .env ai-answer-service
-```
 
-Docker Compose（最简单）：
-
-```bash
+# Docker Compose
 docker-compose up -d
 ```
 
@@ -804,21 +815,35 @@ docker-compose up -d
 
 ## 常见问题
 
-### 1. AI 答案准确性
+### AI 答案准确性
 
-AI 生成的答案可能存在偏差，建议以人工判断为准。
+AI 生成答案可能有偏差，以人工判断为准。
 
-### 2. 多选题答案格式
+### 多选答案格式
 
-OCS 期望 `#` 分隔格式（如 `A#B#C`）。服务通过 `utils.py:extract_answer()` 自动转换 3 种常见格式。
+OCS 期望 `#` 分隔格式。`utils.py:extract_answer()` 通过 4 种模式自动转换。
 
-### 3. API 请求限制
+### Docker 容器访问宿主机 ccswitch
 
-DeepSeek API 有使用限制和费用，确保账户额度充足。
+`docker-compose.yml` 配置了 `extra_hosts: host.docker.internal:host-gateway`。
 
-### 4. Docker 容器访问宿主机 ccswitch
+### Gitee 推送 SSL 错误
 
-`docker-compose.yml` 已配置 `extra_hosts: host.docker.internal:host-gateway`。如果 ccswitch 监听在 `127.0.0.1:15721`，需确保 `~/.claude/settings.json` 中 `ANTHROPIC_BASE_URL` 为 `http://host.docker.internal:15721/...`。
+如果遇到 `schannel: failed to receive handshake`，可以临时禁用 schannel：
+
+```bash
+git -c http.sslBackend=openssl push origin main
+```
+
+---
+
+## 技术栈
+
+- **后端**: Flask + Gunicorn
+- **AI**: Anthropic 兼容协议 (DeepSeek / ccswitch 代理)
+- **前端**: Bootstrap 5 + DataTables + Axios
+- **缓存**: 内存缓存 (MD5 + TTL + LRU)
+- **部署**: Docker + Docker Compose
 
 ---
 

@@ -15,18 +15,17 @@ import anthropic
 from collections import deque
 from datetime import datetime
 
-# 必须在导入 config 之前配置日志，确保 ccswitch 模块的日志也能被正确捕获
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('ai_answer_service')
+# 导入 config 前配置根 logger（防止子模块 "No handler found" 警告），
+# 真正的日志配置由 setup_logger 完成
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 from config import Config
 from utils import SimpleCache, format_answer_for_ocs, parse_question_and_options, extract_answer
+from logger import setup_logger
 
-# 根据配置调整日志级别
-logging.getLogger().setLevel(getattr(logging, Config.LOG_LEVEL))
+# 用 RotatingFileHandler 重新配置日志
+level = getattr(logging, Config.LOG_LEVEL, logging.INFO)
+logger = setup_logger('ai_answer_service', level=level)
 
 # 记录配置来源
 logger.info(f"配置来源: {Config.CONFIG_SOURCE}")
