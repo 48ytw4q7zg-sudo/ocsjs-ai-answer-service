@@ -32,6 +32,20 @@ _ENV_KEYS = (
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
 )
 
+_SENSITIVE_ENV_KEY_PARTS = ("TOKEN", "API_KEY", "SECRET", "PASSWORD")
+
+
+def _is_sensitive_env_key(key: str) -> bool:
+    upper_key = key.upper()
+    return any(part in upper_key for part in _SENSITIVE_ENV_KEY_PARTS)
+
+
+def sanitize_env_for_display(env: Dict[str, str]) -> Dict[str, str]:
+    return {
+        key: "<hidden>" if _is_sensitive_env_key(key) else value
+        for key, value in env.items()
+    }
+
 
 def _sanitize_model_name(model: str) -> str:
     """去除模型名中的上下文长度后缀（如 [1M]、[200K]、[128K]）。
@@ -64,7 +78,7 @@ def extract_all_env(settings: dict) -> Dict[str, str]:
         val = (env.get(key) or "").strip()
         if val:
             result[key] = val
-    return result
+    return sanitize_env_for_display(result)
 
 
 def _load_full_config(config: dict) -> dict:

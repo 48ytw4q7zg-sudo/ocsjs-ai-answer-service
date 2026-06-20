@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 from config import Config, reload_config
+from ccswitch import sanitize_env_for_display
 from utils import SimpleCache, format_answer_for_ocs, parse_question_and_options, extract_answer
 from logger import setup_logger
 
@@ -106,9 +107,9 @@ def _extract_text_from_response(response):
     return None
 
 
-def _call_ai(prompt: str, max_tokens: int = 300):
-    # type: (str, int) -> Optional[str]
+def _call_ai(prompt: str, max_tokens=None):
     """调用 AI API，2 次尝试：正常调用 + 降温简化重试。"""
+    token_limit = max_tokens if max_tokens is not None else Config.MAX_TOKENS
     for attempt in range(2):
         try:
             _current_prompt = prompt
@@ -121,7 +122,7 @@ def _call_ai(prompt: str, max_tokens: int = 300):
             response = client.messages.create(
                 model=Config.ANTHROPIC_MODEL,
                 temperature=_current_temp,
-                max_tokens=max_tokens,
+                max_tokens=token_limit,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": _current_prompt}],
             )
@@ -262,13 +263,19 @@ def health_check():
         'status': 'ok',
         'message': 'AI题库服务运行正常',
         'version': _SERVER_VERSION,
-        'config_source': Config.CONFIG_SOURCE,
         'cache_enabled': Config.ENABLE_CACHE,
         'cache_size': len(cache) if cache is not None else 0,
-        'model': Config.ANTHROPIC_MODEL,
-        'base_url': Config.ANTHROPIC_BASE_URL,
         'uptime_seconds': round(uptime_seconds, 2),
     }
+    if Config.ACCESS_TOKEN and not verify_access_token(request):
+        result['details'] = 'protected'
+        return jsonify(result)
+
+    result.update({
+        'config_source': Config.CONFIG_SOURCE,
+        'model': Config.ANTHROPIC_MODEL,
+        'base_url': Config.ANTHROPIC_BASE_URL,
+    })
     if Config.CONFIG_SOURCE == 'ccswitch':
         result['ccswitch'] = {
             'raw_model': Config.CCSWITCH_RAW_MODEL,
@@ -329,6 +336,9 @@ def get_stats():
 
 @app.route('/dashboard', methods=['GET'])
 def dashboard():
+    if not verify_access_token(request):
+        return jsonify({'success': False, 'message': '无效的访问令牌'}), 403
+
     uptime_seconds = time.time() - start_time
     days = int(uptime_seconds // 86400)
     hours = int((uptime_seconds % 86400) // 3600)
@@ -341,7 +351,7 @@ def dashboard():
             'sanitized_model': Config.ANTHROPIC_MODEL,
             'is_proxy': Config.CCSWITCH_IS_PROXY,
             'base_url': Config.ANTHROPIC_BASE_URL,
-            'extra_env': Config.EXTRA_ENV,
+            'extra_env': sanitize_env_for_display(Config.EXTRA_ENV),
         }
     return render_template(
         'dashboard.html', version=_SERVER_VERSION, config_source=Config.CONFIG_SOURCE,

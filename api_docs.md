@@ -66,15 +66,29 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 
 **方法**: `GET`
 
-**认证**: 无需
+**认证**: 默认无需；设置 `ACCESS_TOKEN` 后，无令牌只返回最小状态，带令牌返回详细配置
 
-**响应** (v2.1.0 增强):
+**最小响应** (设置 `ACCESS_TOKEN` 且未传令牌):
 
 ```json
 {
   "status": "ok",
   "message": "AI题库服务运行正常",
-  "version": "2.1.0",
+  "version": "2026.6.10.1739",
+  "cache_enabled": true,
+  "cache_size": 0,
+  "uptime_seconds": 12345.67,
+  "details": "protected"
+}
+```
+
+**详细响应** (未设置 `ACCESS_TOKEN`，或已传有效令牌):
+
+```json
+{
+  "status": "ok",
+  "message": "AI题库服务运行正常",
+  "version": "2026.6.10.1739",
   "config_source": "ccswitch",
   "cache_enabled": true,
   "cache_size": 42,
@@ -97,7 +111,7 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 | `raw_model` | string | settings.json 中的原始模型名（可能含 `[1M]` 后缀） |
 | `is_proxy` | bool | 是否通过 ccswitch 本地代理连接 |
 | `model_sanitized` | bool | 模型名是否经过净化处理 |
-| `config_keys` | [string] | settings.json env 中所有配置键名列表 |
+| `config_keys` | [string] | settings.json env 中所有配置键名列表；设置 `ACCESS_TOKEN` 后必须带令牌才返回 |
 
 ### 3. 配置重载接口 (v2.1.0 新增)
 
@@ -181,7 +195,7 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 | 路由 | 功能 | 认证 | 说明 |
 |------|------|:----:|------|
 | `/` | 问答测试 | — | Bootstrap 5 表单 + Axios 调用 `/api/search` + XSS 防护 |
-| `/dashboard` | 统计面板 | — | Jinja2 渲染 + DataTables + ccswitch 详情 + 重载/清除按钮 |
+| `/dashboard` | 统计面板 | 设置 ACCESS_TOKEN 时需要 | Jinja2 渲染 + DataTables + ccswitch 详情 + 重载/清除按钮；浏览器用 `/dashboard?token=<token>` 访问后，按钮会自动携带令牌 |
 | `/docs` | API 文档 | — | `api_docs.md` 渲染为 HTML |
 
 ## OCS配置示例
@@ -216,8 +230,10 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 | `/api/cache/clear` | 同上 |
 | `/api/stats` | 同上 |
 | `/api/config/reload` | 同上 |
+| `/dashboard` | 浏览器访问 `/dashboard?token=<token>` |
+| `/api/health` 详细字段 | `X-Access-Token: <token>` 头 或 `?token=<token>` 参数 |
 
-> `/`、`/dashboard`、`/docs`、`/api/health` 不受令牌保护。
+> `/`、`/docs` 始终不受令牌保护。`/api/health` 始终可访问，但设置 `ACCESS_TOKEN` 后无令牌只返回最小状态。
 
 ## ccswitch 模型名净化 (v2.1.0 新增)
 
@@ -241,7 +257,7 @@ claude-opus-4-7[200K] → claude-opus-4-7
 5. 后续 /api/search 请求使用新配置
 ```
 
-可在仪表盘 `/dashboard` 点击「重载配置」按钮完成。
+可在仪表盘 `/dashboard` 点击「重载配置」按钮完成；如果设置了 `ACCESS_TOKEN`，请使用 `/dashboard?token=<token>` 打开页面。
 
 ## 注意事项
 

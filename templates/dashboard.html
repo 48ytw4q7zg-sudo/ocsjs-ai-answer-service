@@ -187,16 +187,35 @@
         });
     });
 
+    function getAccessToken() {
+        return new URLSearchParams(window.location.search).get('token') || '';
+    }
+
+    function authHeaders() {
+        var token = getAccessToken();
+        return token ? {'X-Access-Token': token} : {};
+    }
+
+    function parseJsonResponse(response) {
+        return response.json().then(function(data) {
+            return {ok: response.ok, status: response.status, data: data};
+        });
+    }
+
     function clearCache() {
         if (confirm('确定要清除所有缓存吗？')) {
             fetch('/api/cache/clear', {
                 method: 'POST',
+                headers: authHeaders(),
             })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
+            .then(parseJsonResponse)
+            .then(result => {
+                const data = result.data;
+                if (result.ok && data.success) {
                     alert('缓存已清除');
                     location.reload();
+                } else if (result.status === 403) {
+                    alert('访问令牌无效或已过期');
                 } else {
                     alert('清除缓存失败: ' + data.message);
                 }
@@ -211,12 +230,16 @@
         if (confirm('确定要重新加载 ccswitch 配置吗？')) {
             fetch('/api/config/reload', {
                 method: 'POST',
+                headers: authHeaders(),
             })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
+            .then(parseJsonResponse)
+            .then(result => {
+                const data = result.data;
+                if (result.ok && data.success) {
                     alert(data.message + '\n模型: ' + data.model + '\n来源: ' + data.config_source);
                     location.reload();
+                } else if (result.status === 403) {
+                    alert('访问令牌无效或已过期');
                 } else {
                     alert('重载失败: ' + data.message);
                 }

@@ -27,10 +27,10 @@
 - **直连 API 支持**: ccswitch 离线时自动回退到 `.env` 配置，支持直连 DeepSeek 等 Anthropic 兼容 API
 - **OCS 兼容**: 完全兼容 OCS 的 AnswererWrapper 题库接口
 - **高性能缓存**: 线程安全的内存缓存（MD5 哈希键 + TTL 过期 + LRU 淘汰）
-- **安全可靠**: 支持 ACCESS_TOKEN 双重验证（Header `X-Access-Token` / URL `?token=`）
+- **安全可靠**: 支持 ACCESS_TOKEN 双重验证（Header `X-Access-Token` / URL `?token=`），仪表盘和健康检查会在配置令牌后隐藏敏感运行信息
 - **多种题型**: 支持单选(single)、多选(multiple)、判断(judgement)、填空(completion)
 - **错误处理**: API 超时、连接失败、HTTP 错误分级处理与友好提示
-- **数据统计**: `/dashboard` 仪表盘实时监控服务状态、ccswitch 配置详情和问答历史
+- **数据统计**: `/dashboard` 仪表盘实时监控服务状态、ccswitch 配置详情和问答历史，ccswitch 敏感环境变量只显示 `<hidden>`
 - **Web UI**: Bootstrap 5 响应式界面，支持移动端，XSS 防护
 - **日志轮转**: RotatingFileHandler 自动按 10MB 切割，保留 5 个历史文件，Windows 控制台 UTF-8 兼容
 - **增强提示词** (v2.2.0): 题目+选项+题型指令强制合并为一条完整提示词，AI 基于实际选项作答
@@ -251,14 +251,14 @@ CLAUDE_CODE_EFFORT_LEVEL, ENABLE_TOOL_SEARCH,
 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 ```
 
-这些键值对应仪表盘的 "ccswitch 完整环境变量" 可折叠面板。
+这些键值对应仪表盘的 "ccswitch 环境变量" 可折叠面板；`TOKEN`、`API_KEY`、`SECRET`、`PASSWORD` 等敏感字段会统一显示为 `<hidden>`。
 
 **`reload_ccswitch_config()` 运行时重载** (v2.1.0 新增):
 
 ```
 1. 调用 get_ccswitch_config() 强制重新读取文件
 2. 额外解析 settings.json → extract_all_env() 获取完整 env
-3. 返回包含 extra_env 字段的完整字典
+3. 返回包含 extra_env 字段的字典，敏感值已脱敏
 4. 供 config.reload_config() 和 /api/config/reload 端点使用
 ```
 
@@ -383,10 +383,10 @@ Flask Web 服务主文件，是整个系统的中枢。
 | 路由 | 方法 | 函数 | 功能 | 令牌验证 |
 |------|------|------|------|:---:|
 | `/` | GET | `index()` | 返回问答测试首页 `index.html`（传递 version 变量） | — |
-| `/dashboard` | GET | `dashboard()` | 返回仪表盘页面（含 ccswitch 详情 + 环境变量面板） | — |
+| `/dashboard` | GET | `dashboard()` | 返回仪表盘页面（含 ccswitch 详情 + 脱敏环境变量面板） | 设置 ACCESS_TOKEN 时需要 |
 | `/docs` | GET | `docs()` | 读取 `api_docs.md` 并用 `markdown` 库渲染为 HTML | — |
 | `/api/search` | GET/POST | `search()` | 核心搜索接口，调用 AI 生成答案 | ✓ |
-| `/api/health` | GET | `health_check()` | 健康检查（含 ccswitch 净化信息 + config_keys） | — |
+| `/api/health` | GET | `health_check()` | 健康检查；设置 ACCESS_TOKEN 后，无令牌只返回最小状态，带令牌返回 ccswitch 详情 | 可选 |
 | `/api/config/reload` | POST | `config_reload()` | **v2.1.0 新增**: 运行时重载 ccswitch 配置 | ✓ |
 | `/api/cache/clear` | POST | `clear_cache()` | 清除全部缓存，返回清除条目数量 | ✓ |
 | `/api/stats` | GET | `get_stats()` | 返回服务统计（含 ccswitch 原始模型名） | ✓ |
@@ -517,7 +517,7 @@ ccswitch_info = {
     'sanitized_model': Config.ANTHROPIC_MODEL,      # 净化后模型名
     'is_proxy': Config.CCSWITCH_IS_PROXY,           # 是否代理模式
     'base_url': Config.ANTHROPIC_BASE_URL,          # API 地址
-    'extra_env': Config.EXTRA_ENV,                  # 完整 14 项 env 字典
+    'extra_env': sanitize_env_for_display(Config.EXTRA_ENV),  # 脱敏 env 字典
 }
 ```
 
@@ -525,7 +525,7 @@ ccswitch_info = {
 - 配置来源 badge（ccswitch=绿色，.env=灰色）
 - ccswitch 原始模型名 + 已净化标签
 - 连接模式（代理/直连）
-- ccswitch 完整环境变量可折叠面板（14 项）
+- ccswitch 环境变量可折叠面板（敏感值显示为 `<hidden>`）
 - 「重载配置」按钮
 
 **启动入口**:
@@ -781,7 +781,7 @@ function escapeHtml(text) {
 | `sanitized_model` | 净化后模型名 |
 | `is_proxy` | 是否代理模式 |
 | `base_url` | API 地址 |
-| `extra_env` | 完整 env 字典（14 项） |
+| `extra_env` | 已脱敏 env 字典（敏感值为 `<hidden>`） |
 
 **DOM 结构**:
 
@@ -797,7 +797,7 @@ function escapeHtml(text) {
     ├─ 运行时长
     ├─ CCSwitch 原始模型 (code + 已净化 badge)
     └─ 连接模式 (代理/直连)
-  v2.1.0: ccswitch 完整环境变量可折叠面板 (14 项 key-value 表)
+  v2.1.0+: ccswitch 环境变量可折叠面板（敏感值脱敏）
 
 问答记录卡片
   ├─ 标题 + "重载配置" 按钮 (v2.1.0) + "清除缓存" 按钮
@@ -1016,11 +1016,18 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染（�
 
 ### 健康检查
 
-**GET** `/api/health` · 无需认证
+**GET** `/api/health` · 默认无需认证；设置 `ACCESS_TOKEN` 后，无令牌只返回最小状态，带令牌返回详细配置
 
 ```json
-{"status": "ok", "message": "AI题库服务运行正常", "version": "2.1.0",
- "config_source": "ccswitch", "model": "deepseek-v4-pro",
+{"status": "ok", "message": "AI题库服务运行正常", "version": "2026.6.10.1739",
+ "cache_enabled": true, "cache_size": 0, "uptime_seconds": 12.34,
+ "details": "protected"}
+```
+
+带有效令牌时会额外返回 `config_source`、`model`、`base_url`、`ccswitch`、`config_keys` 等详细字段。
+
+```json
+{"status": "ok", "config_source": "ccswitch", "model": "deepseek-v4-pro",
  "base_url": "https://api.deepseek.com/anthropic",
  "ccswitch": {"raw_model": "deepseek-v4-pro[1M]", "is_proxy": false, "model_sanitized": true}}
 ```
@@ -1061,7 +1068,7 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染（�
 | 路由 | 功能 | 说明 |
 |------|------|------|
 | `/` | 问答测试 | Bootstrap 5 表单 + Axios 调用 `/api/search` + XSS 防护 |
-| `/dashboard` | 统计面板 | Jinja2 渲染 + DataTables + ccswitch 详情面板 + 重载/清除按钮 |
+| `/dashboard` | 统计面板 | Jinja2 渲染 + DataTables + ccswitch 详情面板 + 重载/清除按钮；设置 ACCESS_TOKEN 后需用 `/dashboard?token=<token>` 访问 |
 | `/docs` | API 文档 | `api_docs.md` 渲染为 HTML |
 
 ---
@@ -1076,8 +1083,10 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染（�
 | `/api/cache/clear` | 同上 |
 | `/api/stats` | 同上 |
 | `/api/config/reload` (v2.1.0) | 同上 |
+| `/dashboard` | 浏览器访问 `/dashboard?token=<token>`；页面按钮会自动把 token 作为 `X-Access-Token` 发送 |
+| `/api/health` 详细字段 | `X-Access-Token: <token>` 头 或 `?token=<token>` 参数 |
 
-> `/`、`/dashboard`、`/docs`、`/api/health` 不受令牌保护。
+> `/`、`/docs` 始终不受令牌保护。`/api/health` 始终可访问，但配置令牌后无令牌只返回最小状态。
 
 ---
 
@@ -1136,7 +1145,7 @@ def _sanitize_model_name(model: str) -> str:
        ↓
 2. ccswitch 自动更新 settings.json
        ↓
-3. 浏览器访问 /dashboard → 点击「重载配置」
+3. 浏览器访问 /dashboard（如已配置 ACCESS_TOKEN，则访问 `/dashboard?token=<token>`）→ 点击「重载配置」
     或 POST /api/config/reload
        ↓
 4. reload_config() 重新读取 settings.json
