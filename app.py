@@ -535,28 +535,35 @@ def health_check():
         if runtime_info['ready'] else
         'AI题库服务运行中，但 AI 运行时未就绪'
     )
-    result = {
+    public_result = {
         'status': status,
         'message': message,
         'version': _SERVER_VERSION,
-        'config_source': runtime_info['config_source'],
-        'config_loaded_at': runtime_info['config_loaded_at'],
-        'cache_enabled': runtime_info['cache_enabled'],
         'runtime_ready': runtime_info['ready'],
         'runtime_error': runtime_info['error'],
+        'cache_enabled': runtime_info['cache_enabled'],
         'cache_size': runtime_info['cache_size'],
-        'model': runtime_info['model'],
-        'base_url': runtime_info['base_url'],
         'uptime_seconds': runtime_info['uptime_seconds'],
+        'details': 'protected',
     }
-    if runtime_info['config_source'] == 'ccswitch':
-        ccswitch_payload = runtime_info['ccswitch']
-        if ccswitch_payload:
-            result['ccswitch'] = ccswitch_payload
-            result['config_keys'] = ccswitch_payload.get('config_keys', [])
-    else:
-        result['config_keys'] = []
-    return jsonify(result)
+    if verify_access_token(request):
+        public_result.update({
+            'config_source': runtime_info['config_source'],
+            'config_loaded_at': runtime_info['config_loaded_at'],
+            'model': runtime_info['model'],
+            'base_url': runtime_info['base_url'],
+        })
+        del public_result['details']
+        if runtime_info['config_source'] == 'ccswitch':
+            ccswitch_payload = runtime_info['ccswitch']
+            if ccswitch_payload:
+                public_result['ccswitch'] = ccswitch_payload
+                public_result['config_keys'] = ccswitch_payload.get('config_keys', [])
+            else:
+                public_result['config_keys'] = []
+        else:
+            public_result['config_keys'] = []
+    return jsonify(public_result)
 
 
 @app.route('/api/config/reload', methods=['POST'])
