@@ -82,7 +82,7 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 }
 ```
 
-**详细响应** (未设置 `ACCESS_TOKEN`，或已传有效令牌):
+**详细响应** (已设置 `ACCESS_TOKEN` 且已传有效令牌):
 
 ```json
 {
@@ -234,7 +234,7 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 | `/api/config/reload` | 同上 |
 | `/dashboard` | 浏览器访问 `/dashboard?token=<token>` |
 
-> `/`、`/docs`、`/api/health` 不受令牌保护；`/dashboard` 仅在设置 `ACCESS_TOKEN` 后要求令牌。
+> `/`、`/docs` 不受令牌保护；`/api/health` 在未设置 `ACCESS_TOKEN` 时公开最小状态信息，设置后需带有效令牌查看详细信息；`/dashboard` 仅在设置 `ACCESS_TOKEN` 后要求令牌。
 
 ## ccswitch 模型名净化 (v2.1.0 新增)
 
