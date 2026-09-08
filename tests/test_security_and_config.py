@@ -106,6 +106,22 @@ class ConfigAndSecurityTests(unittest.TestCase):
         self.assertEqual(public_data["details"], "protected")
         self.assertIn("base_url", private_data)
 
+    def test_health_accepts_token_with_surrounding_whitespace(self):
+        original_token = app_module.Config.ACCESS_TOKEN
+        app_module.Config.ACCESS_TOKEN = "health-token"
+
+        try:
+            response = app_module.app.test_client().get(
+                "/api/health", headers={"X-Access-Token": "  health-token  "}
+            )
+        finally:
+            app_module.Config.ACCESS_TOKEN = original_token
+
+        data = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("base_url", data)
+        self.assertNotIn("details", data)
+
     def test_stats_requires_access_token_when_configured(self):
         original_token = app_module.Config.ACCESS_TOKEN
         app_module.Config.ACCESS_TOKEN = "stats-token"
