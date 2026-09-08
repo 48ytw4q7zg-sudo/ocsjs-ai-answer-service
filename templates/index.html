@@ -4,18 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EduBrain AI - 智能题库系统</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/vendor/bootstrap/5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
-    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
         <div class="container">
             <a class="navbar-brand" href="/">EduBrain AI</a>
-            <div class="collapse navbar-collapse">
+            <div class="navbar-nav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
-                        <a class="nav-link" href="/dashboard">统计面板</a>
+                        <a class="nav-link" id="dashboard-link" href="/dashboard">统计面板</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="/docs">API文档</a>
@@ -104,7 +103,59 @@
     </div>
 
     <script>
-        document.getElementById('search-btn').addEventListener('click', async function() {
+        const accessLabel = document.createElement('label');
+        accessLabel.className = 'form-label';
+        accessLabel.htmlFor = 'access-token';
+        accessLabel.textContent = '访问令牌（服务启用认证时填写）';
+        const accessInput = document.createElement('input');
+        accessInput.id = 'access-token';
+        accessInput.type = 'password';
+        accessInput.autocomplete = 'off';
+        accessInput.className = 'form-control mb-4';
+        const searchButton = document.getElementById('search-btn');
+        searchButton.parentElement.before(accessLabel, accessInput);
+
+        let dashboardNavigationPending = false;
+        document.getElementById('dashboard-link').addEventListener('click', async function(event) {
+            event.preventDefault();
+            if (dashboardNavigationPending) return;
+            dashboardNavigationPending = true;
+            const controller = new AbortController();
+            let timeout;
+            try {
+                await Promise.race([
+                    (async () => {
+                        const response = await fetch('/api/session', {
+                            method: 'POST', credentials: 'same-origin',
+                            headers: {'Content-Type': 'application/json'},
+                            signal: controller.signal,
+                            body: JSON.stringify({token: accessInput.value || undefined})
+                        });
+                        const data = await response.json();
+                        if (!response.ok || data.code !== 1) throw new Error(data.msg || '无法建立浏览器会话');
+                    })(),
+                    new Promise((_, reject) => {
+                        timeout = setTimeout(() => {
+                            controller.abort();
+                            reject(new Error('验证访问权限超时，请重试'));
+                        }, 15000);
+                    })
+                ]);
+                window.location.assign('/dashboard');
+            } catch (error) {
+                const result = document.getElementById('result');
+                result.style.display = 'block';
+                result.classList.add('border', 'border-danger');
+                document.getElementById('answer-content').innerHTML = '<p class="text-danger">无法进入统计面板：' + escapeHtml(error.message || '请检查访问令牌') + '</p>';
+                accessInput.focus();
+            } finally {
+                clearTimeout(timeout);
+                dashboardNavigationPending = false;
+            }
+        });
+
+        searchButton.addEventListener('click', async function() {
+            if (searchButton.disabled) return;
             const question = document.getElementById('question').value.trim();
             const questionType = document.getElementById('question-type').value;
             const options = document.getElementById('options').value.trim();
@@ -116,21 +167,30 @@
 
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
+            searchButton.disabled = true;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 120000);
 
             try {
-                const response = await axios.get('/api/search', {
-                    params: {
+                const response = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    signal: controller.signal,
+                    body: JSON.stringify({
+                        token: accessInput.value || undefined,
                         title: question,
                         type: questionType || undefined,
                         options: options || undefined
-                    }
+                    })
                 });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.msg || '请求失败，请检查服务状态或访问令牌');
 
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('result').style.display = 'block';
                 const resultEl = document.getElementById('result');
                 const answerEl = document.getElementById('answer-content');
-                const result = response.data;
+                const result = data;
 
                 if (result.code === 1) {
                     resultEl.classList.remove('border-danger');
@@ -148,6 +208,9 @@
                     ? error.response.data.msg
                     : error.message;
                 document.getElementById('answer-content').innerHTML = '<p class="text-danger">请求失败: ' + escapeHtml(msg) + '</p>';
+            } finally {
+                clearTimeout(timeout);
+                searchButton.disabled = false;
             }
         });
 

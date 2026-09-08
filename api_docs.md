@@ -24,9 +24,9 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 
 | 参数名   | 类型   | 必填 | 说明                                                     |
 |---------|--------|------|----------------------------------------------------------|
-| title   | string | 是   | 题目内容（最大 2000 字符）                                |
-| type    | string | 否   | 题目类型 (single-单选, multiple-多选, judgement-判断, completion-填空) |
-| options | string | 否   | 选项内容，通常是A、B、C、D选项的文本                       |
+| title / question / q / content / text | string | 是   | 题目内容（最大 2000 字符）；`title` 为 OCS 原字段，二者同时存在时优先使用靠前的非空字段 |
+| type / questionType / question_type / qtype / category / kind | string/number | 否   | 题目类型：`single`/`multiple`/`judgement`/`completion`；也兼容 `1` 单选、`2` 多选、`3` 判断、`4` 填空 |
+| options / choices / answers / answerOptions / option / opts | string/array/object | 否   | 选项内容，通常是A、B、C、D选项的文本；JSON 请求体必须是对象，支持 `application/json` 和 `application/*+json`；选项可传字符串、字符串数组、对象数组（如 `{label,text}`）或键值对象（如 `{A:"上海"}`）；服务会统一换行、去除空行和首尾空格 |
 
 **成功响应** (HTTP 200):
 
@@ -53,7 +53,7 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 |------------|------|------|
 | 200 | 1 | 成功 |
 | 200 | 0 | 业务失败（AI 未返回有效答案） |
-| 400 | 0 | 请求参数错误（空问题、过长问题、无效 JSON） |
+| 400 | 0 | 请求参数错误（空问题、过长问题、无效 JSON、非对象 JSON 请求体） |
 | 403 | 0 | 令牌验证失败 |
 | 500 | 0 | 服务内部错误 |
 | 502 | 0 | 无法连接到 AI 服务 |
@@ -98,6 +98,8 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 | `is_proxy` | bool | 是否通过 ccswitch 本地代理连接 |
 | `model_sanitized` | bool | 模型名是否经过净化处理 |
 | `config_keys` | [string] | settings.json env 中所有配置键名列表 |
+
+> 仪表盘展示 ccswitch 环境变量时会隐藏 `TOKEN`、`KEY`、`SECRET`、`PASSWORD`、`AUTH` 等敏感字段的值。
 
 ### 3. 配置重载接口 (v2.1.0 新增)
 
@@ -181,7 +183,7 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 | 路由 | 功能 | 认证 | 说明 |
 |------|------|:----:|------|
 | `/` | 问答测试 | — | Bootstrap 5 表单 + Axios 调用 `/api/search` + XSS 防护 |
-| `/dashboard` | 统计面板 | — | Jinja2 渲染 + DataTables + ccswitch 详情 + 重载/清除按钮 |
+| `/dashboard` | 统计面板 | ACCESS_TOKEN（如已配置） | Jinja2 渲染 + DataTables + ccswitch 详情 + 重载/清除按钮 |
 | `/docs` | API 文档 | — | `api_docs.md` 渲染为 HTML |
 
 ## OCS配置示例
@@ -216,8 +218,9 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 | `/api/cache/clear` | 同上 |
 | `/api/stats` | 同上 |
 | `/api/config/reload` | 同上 |
+| `/dashboard` | 浏览器访问 `/dashboard?token=<token>` |
 
-> `/`、`/dashboard`、`/docs`、`/api/health` 不受令牌保护。
+> `/`、`/docs`、`/api/health` 不受令牌保护；`/dashboard` 仅在设置 `ACCESS_TOKEN` 后要求令牌。
 
 ## ccswitch 模型名净化 (v2.1.0 新增)
 
@@ -245,7 +248,7 @@ claude-opus-4-7[200K] → claude-opus-4-7
 
 ## 注意事项
 
-1. **多选题答案格式**: 对于多选题，OCS期望的答案格式是用`#`分隔的选项，例如`A#B#C`。本服务通过 4 种模式自动检测并转换。
+1. **选项答案格式**: 对于单选题/多选题，服务会把 AI 返回的 `B`、`A#C`、`A,C` 等字母答案按本次 `options` 映射为真实选项文本，例如 `北京`、`北京#广州`；如果单选模型返回 `B，因为...` 或 `北京，因为...`，也会归一化为真实选项文本。
 2. **API请求限制**: 注意 DeepSeek API 有使用限制和费用。确保账户有足够额度。
 3. **网络连接**: 确保服务所在服务器能访问 `api.deepseek.com`。
 4. **题库域名**: OCS 脚本头部元信息 `@connect` 中需新增题库配置涉及的域名。

@@ -1,0 +1,346 @@
+{
+  "schema_version": 1,
+  "description": "Canonical pins for the optional offline browser interface in the Windows 10/11 x64 USB portable release.",
+  "regenerate_command": "powershell.exe -NoProfile -File .\\packaging\\vendor-assets.ps1",
+  "verify_command": "powershell.exe -NoProfile -File .\\packaging\\vendor-assets.ps1 -VerifyOnly",
+  "notice": "THIRD_PARTY_NOTICES.md",
+  "notes": [
+    "Files and license texts are copied byte-for-byte. Do not modify minified files or hand-edit their generated copies.",
+    "NPM archives were checked against the registry SHA512 integrity and have locked archive and member SHA256 digests.",
+    "The original DataTables 1.13.8 Chinese translation and license are taken from its official versioned distribution; that plug-ins version is not published on NPM.",
+    "Popper is included inside Bootstrap's bundle; its original MIT license is included separately.",
+    "Bootstrap source maps are included so their relative sourceMappingURL references also resolve offline.",
+    "Regeneration is a maintainer operation requiring network access and Windows PowerShell/.NET only. Normal portable startup and the optional browser UI perform no dependency downloads."
+  ],
+  "packages": [
+    {
+      "name": "bootstrap",
+      "version": "5.3.0",
+      "license": "MIT",
+      "homepage": "https://getbootstrap.com/",
+      "repository": "git+https://github.com/twbs/bootstrap.git",
+      "archive": {
+        "url": "https://registry.npmjs.org/bootstrap/-/bootstrap-5.3.0.tgz",
+        "sha256": "9f63ace4e98f71c50aab3948772e3bf5e176f6b39708e914b09ed32f845a8db2",
+        "sha512_integrity": "sha512-UnBV3E3v4STVNQdms6jSGO2CvOkjUMdDAVR2V5N4uCMdaIkaQjbcEAMqRimDHIs4uqBYzDAKCQwCB+97tJgHQw==",
+        "bytes": 1677869
+      },
+      "license_path": "static/vendor/bootstrap/5.3.0/LICENSE",
+      "files": [
+        {
+          "member": "package/dist/css/bootstrap.min.css",
+          "path": "static/vendor/bootstrap/5.3.0/dist/css/bootstrap.min.css",
+          "sha256": "7f1d37f0d90b6385354c2ac10e2bb91563c46bd7a266ed351222ebcac8496c2a",
+          "bytes": 232914,
+          "role": "asset"
+        },
+        {
+          "member": "package/dist/css/bootstrap.min.css.map",
+          "path": "static/vendor/bootstrap/5.3.0/dist/css/bootstrap.min.css.map",
+          "sha256": "68ae84685ddbce0297bbcea4b470bdf0c94f78b4254bddc154a4a38673852f03",
+          "bytes": 589307,
+          "role": "source_map"
+        },
+        {
+          "member": "package/dist/js/bootstrap.bundle.min.js",
+          "path": "static/vendor/bootstrap/5.3.0/dist/js/bootstrap.bundle.min.js",
+          "sha256": "aa53d582f97eb594c2a5cc5824574707f9ba9837bce3046bfa5f3556860f4e04",
+          "bytes": 80421,
+          "role": "asset"
+        },
+        {
+          "member": "package/dist/js/bootstrap.bundle.min.js.map",
+          "path": "static/vendor/bootstrap/5.3.0/dist/js/bootstrap.bundle.min.js.map",
+          "sha256": "29f50fad80f38445bdaea573a5fbd6c98f31c06b63e0f6a8711547fe8da00de2",
+          "bytes": 328624,
+          "role": "source_map"
+        },
+        {
+          "member": "package/LICENSE",
+          "path": "static/vendor/bootstrap/5.3.0/LICENSE",
+          "sha256": "3d0b0c88216e4752b9afd3d24e36faaf27873b5a45a61458bb3c83e794c26832",
+          "bytes": 1093,
+          "role": "license"
+        }
+      ]
+    },
+    {
+      "name": "jquery",
+      "version": "3.7.1",
+      "license": "MIT",
+      "homepage": "https://jquery.com",
+      "repository": "git+https://github.com/jquery/jquery.git",
+      "archive": {
+        "url": "https://registry.npmjs.org/jquery/-/jquery-3.7.1.tgz",
+        "sha256": "68a9f787516da47c680e09c187bcbac4536b6f85d90eb882844e12919e583f53",
+        "sha512_integrity": "sha512-m4avr8yL8kmFN8psrbFFFmB/If14iN5o9nw/NgnnM+kybDJpRsAynV2BsfpTYrTRysYUdADVD7CkUUizgkpLfg==",
+        "bytes": 404231
+      },
+      "license_path": "static/vendor/jquery/3.7.1/LICENSE.txt",
+      "files": [
+        {
+          "member": "package/dist/jquery.min.js",
+          "path": "static/vendor/jquery/3.7.1/dist/jquery.min.js",
+          "sha256": "fc9a93dd241f6b045cbff0481cf4e1901becd0e12fb45166a8f17f95823f0b1a",
+          "bytes": 87533,
+          "role": "asset"
+        },
+        {
+          "member": "package/LICENSE.txt",
+          "path": "static/vendor/jquery/3.7.1/LICENSE.txt",
+          "sha256": "d4db9ebe6f29f5168eac45ad713f055623ac5d0dcd5ba92da23d650ae012020d",
+          "bytes": 1097,
+          "role": "license"
+        }
+      ]
+    },
+    {
+      "name": "datatables.net",
+      "version": "1.13.8",
+      "license": "MIT",
+      "homepage": "https://datatables.net",
+      "repository": "git+https://github.com/DataTables/Dist-DataTables.git",
+      "archive": {
+        "url": "https://registry.npmjs.org/datatables.net/-/datatables.net-1.13.8.tgz",
+        "sha256": "fab4fff3370f5bcc30bb1ab07d37da288d88d7c1eae7ac4a2d2abbe026d7a578",
+        "sha512_integrity": "sha512-2pDamr+GUwPTby2OgriVB9dR9ftFKD2AQyiuCXzZIiG4d9KkKFQ7gqPfNmG7uj9Tc5kDf+rGj86do4LAb/V71g==",
+        "bytes": 307038
+      },
+      "license_path": "static/vendor/datatables.net/1.13.8/License.txt",
+      "files": [
+        {
+          "member": "package/js/jquery.dataTables.min.js",
+          "path": "static/vendor/datatables.net/1.13.8/js/jquery.dataTables.min.js",
+          "sha256": "6f95c760ff08c927ff382f5caedb82249dbce9e3ef5cc2d230b1a86268931371",
+          "bytes": 87293,
+          "role": "asset"
+        },
+        {
+          "member": "package/License.txt",
+          "path": "static/vendor/datatables.net/1.13.8/License.txt",
+          "sha256": "62b5fdd54371b4f6bd07a60dbc78b38814f49a8028213f540dc2733cad605382",
+          "bytes": 1120,
+          "role": "license"
+        }
+      ]
+    },
+    {
+      "name": "datatables.net-bs5",
+      "version": "1.13.8",
+      "license": "MIT",
+      "homepage": "https://datatables.net",
+      "repository": "git+https://github.com/DataTables/Dist-DataTables-Bootstrap5.git",
+      "archive": {
+        "url": "https://registry.npmjs.org/datatables.net-bs5/-/datatables.net-bs5-1.13.8.tgz",
+        "sha256": "72731ec87fd839c809493e3163929be821c298945708d560108c0bacd156393f",
+        "sha512_integrity": "sha512-3B6S8LiKGtUtOsA97SkMddwggrza6JDtubnw1qjFb/mjqDmWO0PC1+QWeUspkLPFQCCbLaSVfXLWMdo44IGEmQ==",
+        "bytes": 11262
+      },
+      "license_path": "static/vendor/datatables.net-bs5/1.13.8/License.txt",
+      "files": [
+        {
+          "member": "package/css/dataTables.bootstrap5.min.css",
+          "path": "static/vendor/datatables.net-bs5/1.13.8/css/dataTables.bootstrap5.min.css",
+          "sha256": "133dcea94f62544011e134755b2b3dc0cd1d49c195fb8a9fa4a706159f30de1e",
+          "bytes": 12123,
+          "role": "asset"
+        },
+        {
+          "member": "package/js/dataTables.bootstrap5.min.js",
+          "path": "static/vendor/datatables.net-bs5/1.13.8/js/dataTables.bootstrap5.min.js",
+          "sha256": "de25c7adf49de31cc8d58caba281748c6e0e5701a2480a14d7e59d6301306199",
+          "bytes": 2358,
+          "role": "asset"
+        },
+        {
+          "member": "package/License.txt",
+          "path": "static/vendor/datatables.net-bs5/1.13.8/License.txt",
+          "sha256": "62b5fdd54371b4f6bd07a60dbc78b38814f49a8028213f540dc2733cad605382",
+          "bytes": 1120,
+          "role": "license"
+        }
+      ]
+    },
+    {
+      "name": "datatables.net-responsive",
+      "version": "2.5.0",
+      "license": "MIT",
+      "homepage": "https://datatables.net",
+      "repository": "git+https://github.com/DataTables/Dist-DataTables-Responsive.git",
+      "archive": {
+        "url": "https://registry.npmjs.org/datatables.net-responsive/-/datatables.net-responsive-2.5.0.tgz",
+        "sha256": "76080ae681f0e3f4b7ccbf6f17ccc28078dcb6d0bf94dfc8b3f98679b2d96c99",
+        "sha512_integrity": "sha512-GL7DFiRl5qqrp5ql54Psz92xTGPR0rMcrO3hzNxMfvcfpRGL5zFNTvMpTUh59Erm6u1+KoX+j+Ig1ZD3r0iFsA==",
+        "bytes": 33846
+      },
+      "license_path": "static/vendor/datatables.net-responsive/2.5.0/License.txt",
+      "files": [
+        {
+          "member": "package/js/dataTables.responsive.min.js",
+          "path": "static/vendor/datatables.net-responsive/2.5.0/js/dataTables.responsive.min.js",
+          "sha256": "2cb9a6aebf61617ae31e3e70f50d80b31be89b612b90addb59c9d9ddb750e651",
+          "bytes": 14778,
+          "role": "asset"
+        },
+        {
+          "member": "package/License.txt",
+          "path": "static/vendor/datatables.net-responsive/2.5.0/License.txt",
+          "sha256": "62b5fdd54371b4f6bd07a60dbc78b38814f49a8028213f540dc2733cad605382",
+          "bytes": 1120,
+          "role": "license"
+        }
+      ]
+    },
+    {
+      "name": "datatables.net-responsive-bs5",
+      "version": "2.5.0",
+      "license": "MIT",
+      "homepage": "https://datatables.net",
+      "repository": "git+https://github.com/DataTables/Dist-DataTables-Responsive-Bootstrap5.git",
+      "archive": {
+        "url": "https://registry.npmjs.org/datatables.net-responsive-bs5/-/datatables.net-responsive-bs5-2.5.0.tgz",
+        "sha256": "1ff9cb52bbefb088b81216684d13be01459519dd2f4df16741830f60b70efd37",
+        "sha512_integrity": "sha512-GklXpvBKOal11chL9l8RiQsvKYEZwxKA50pgwlkrbxrmRmqMH7+sMvLSE42QQCa5E5fWqtYsYdTY+SNkHfa+qA==",
+        "bytes": 5739
+      },
+      "license_path": "static/vendor/datatables.net-responsive-bs5/2.5.0/License.txt",
+      "files": [
+        {
+          "member": "package/css/responsive.bootstrap5.min.css",
+          "path": "static/vendor/datatables.net-responsive-bs5/2.5.0/css/responsive.bootstrap5.min.css",
+          "sha256": "ef9b127bb73ddeb48fdad7dfad0063902cc6603c2b5a2aca76b5b32116b8c067",
+          "bytes": 4309,
+          "role": "asset"
+        },
+        {
+          "member": "package/js/responsive.bootstrap5.min.js",
+          "path": "static/vendor/datatables.net-responsive-bs5/2.5.0/js/responsive.bootstrap5.min.js",
+          "sha256": "7f1266883b7c2b4f5e962780fc9dbcbec12f4ac98580652fa0bb04807fee531e",
+          "bytes": 1627,
+          "role": "asset"
+        },
+        {
+          "member": "package/License.txt",
+          "path": "static/vendor/datatables.net-responsive-bs5/2.5.0/License.txt",
+          "sha256": "62b5fdd54371b4f6bd07a60dbc78b38814f49a8028213f540dc2733cad605382",
+          "bytes": 1120,
+          "role": "license"
+        }
+      ]
+    },
+    {
+      "name": "@popperjs/core",
+      "version": "2.11.7",
+      "license": "MIT",
+      "homepage": "https://popper.js.org/",
+      "repository": "https://github.com/popperjs/popper-core.git",
+      "archive": {
+        "url": "https://registry.npmjs.org/@popperjs/core/-/core-2.11.7.tgz",
+        "sha256": "1394977485768802e35bf2b95d4827414b704bf808d03a6ba283a3c47851cf04",
+        "sha512_integrity": "sha512-Cr4OjIkipTtcXKjAsm8agyleBuDHvxzeBoa1v543lbv1YaIwQjESsVcmjiWiPEbC1FIeHOG/Op9kdCmAmiS3Kw==",
+        "bytes": 431505
+      },
+      "license_path": "static/vendor/popperjs/core/2.11.7/LICENSE.md",
+      "files": [
+        {
+          "member": "package/LICENSE.md",
+          "path": "static/vendor/popperjs/core/2.11.7/LICENSE.md",
+          "sha256": "bf67e2c9b7974543bb18ced3a0b37f53729aaff953b442dd89a3adaf90fd93e8",
+          "bytes": 1082,
+          "role": "license"
+        }
+      ]
+    },
+    {
+      "name": "datatables-plugins-i18n",
+      "version": "1.13.8",
+      "license": "MIT",
+      "homepage": "https://datatables.net/plug-ins/i18n/",
+      "license_path": "static/vendor/datatables-plugins/1.13.8/License.txt",
+      "files": [
+        {
+          "url": "https://cdn.datatables.net/plug-ins/1.13.8/i18n/zh.json",
+          "path": "static/vendor/datatables-plugins/1.13.8/i18n/zh.json",
+          "sha256": "c86e64f265ab28ab0a67bc2e1f58e6fb805cd952d064258d34ae7329c6203ef6",
+          "bytes": 7841,
+          "role": "asset"
+        },
+        {
+          "url": "https://cdn.datatables.net/plug-ins/1.13.8/License.txt",
+          "path": "static/vendor/datatables-plugins/1.13.8/License.txt",
+          "sha256": "46daf76193ec5496a09285dfc4c58127f68d895c4de20ded97aff6d58b452a35",
+          "bytes": 1088,
+          "role": "license"
+        }
+      ]
+    }
+  ],
+  "template_references": [
+    {
+      "template": "templates/index.html",
+      "kind": "stylesheet",
+      "original_url": "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css",
+      "local_url": "/static/vendor/bootstrap/5.3.0/dist/css/bootstrap.min.css"
+    },
+    {
+      "template": "templates/dashboard.html",
+      "kind": "stylesheet",
+      "original_url": "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css",
+      "local_url": "/static/vendor/bootstrap/5.3.0/dist/css/bootstrap.min.css"
+    },
+    {
+      "template": "templates/dashboard.html",
+      "kind": "stylesheet",
+      "original_url": "https://cdn.jsdelivr.net/npm/datatables.net-bs5@1.13.8/css/dataTables.bootstrap5.min.css",
+      "local_url": "/static/vendor/datatables.net-bs5/1.13.8/css/dataTables.bootstrap5.min.css"
+    },
+    {
+      "template": "templates/dashboard.html",
+      "kind": "stylesheet",
+      "original_url": "https://cdn.jsdelivr.net/npm/datatables.net-responsive-bs5@2.5.0/css/responsive.bootstrap5.min.css",
+      "local_url": "/static/vendor/datatables.net-responsive-bs5/2.5.0/css/responsive.bootstrap5.min.css"
+    },
+    {
+      "template": "templates/dashboard.html",
+      "kind": "script",
+      "original_url": "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js",
+      "local_url": "/static/vendor/bootstrap/5.3.0/dist/js/bootstrap.bundle.min.js"
+    },
+    {
+      "template": "templates/dashboard.html",
+      "kind": "script",
+      "original_url": "https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js",
+      "local_url": "/static/vendor/jquery/3.7.1/dist/jquery.min.js"
+    },
+    {
+      "template": "templates/dashboard.html",
+      "kind": "script",
+      "original_url": "https://cdn.jsdelivr.net/npm/datatables.net@1.13.8/js/jquery.dataTables.min.js",
+      "local_url": "/static/vendor/datatables.net/1.13.8/js/jquery.dataTables.min.js"
+    },
+    {
+      "template": "templates/dashboard.html",
+      "kind": "script",
+      "original_url": "https://cdn.jsdelivr.net/npm/datatables.net-bs5@1.13.8/js/dataTables.bootstrap5.min.js",
+      "local_url": "/static/vendor/datatables.net-bs5/1.13.8/js/dataTables.bootstrap5.min.js"
+    },
+    {
+      "template": "templates/dashboard.html",
+      "kind": "script",
+      "original_url": "https://cdn.jsdelivr.net/npm/datatables.net-responsive@2.5.0/js/dataTables.responsive.min.js",
+      "local_url": "/static/vendor/datatables.net-responsive/2.5.0/js/dataTables.responsive.min.js"
+    },
+    {
+      "template": "templates/dashboard.html",
+      "kind": "script",
+      "original_url": "https://cdn.jsdelivr.net/npm/datatables.net-responsive-bs5@2.5.0/js/responsive.bootstrap5.min.js",
+      "local_url": "/static/vendor/datatables.net-responsive-bs5/2.5.0/js/responsive.bootstrap5.min.js"
+    },
+    {
+      "template": "templates/dashboard.html",
+      "kind": "language",
+      "original_url": "https://cdn.datatables.net/plug-ins/1.13.8/i18n/zh.json",
+      "local_url": "/static/vendor/datatables-plugins/1.13.8/i18n/zh.json"
+    }
+  ]
+}

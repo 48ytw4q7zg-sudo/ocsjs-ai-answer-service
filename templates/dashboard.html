@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EduBrain AI - 智能题库统计面板 v{{ version }}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/datatables.net-bs5@1.13.8/css/dataTables.bootstrap5.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/datatables.net-responsive-bs5@2.5.0/css/responsive.bootstrap5.min.css" rel="stylesheet">
+    <link href="/static/vendor/bootstrap/5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/vendor/datatables.net-bs5/1.13.8/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <link href="/static/vendor/datatables.net-responsive-bs5/2.5.0/css/responsive.bootstrap5.min.css" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -37,40 +37,57 @@
                         <div class="row">
                             <div class="col-md-6">
                                 <p><strong>版本：</strong>{{ version }}</p>
-                                <p><strong>配置来源：</strong><span class="badge {% if config_source == 'ccswitch' %}bg-success{% else %}bg-secondary{% endif %}">{{ config_source }}</span></p>
-                                <p><strong>缓存状态：</strong>{{ "已启用" if cache_enabled else "未启用" }}</p>
-                                <p><strong>缓存数量：</strong>{{ cache_size }}条</p>
+                                <p><strong>配置来源：</strong><span id="runtime-config-source" class="badge {% if config_source == 'ccswitch' %}bg-success{% else %}bg-secondary{% endif %}">{{ config_source }}</span></p>
+                                <p><strong>缓存状态：</strong><span id="runtime-cache-enabled">{{ "已启用" if cache_enabled else "未启用" }}</span></p>
+                                <p><strong>缓存数量：</strong><span id="runtime-cache-size">{{ cache_size }}</span>条</p>
                             </div>
                             <div class="col-md-6">
-                                <p><strong>使用模型：</strong><code>{{ model }}</code></p>
-                                <p><strong>运行时长：</strong>{{ uptime }}</p>
-                                {% if ccswitch_info %}
-                                <p><strong>CCSwitch 原始模型：</strong><code>{{ ccswitch_info.raw_model }}</code>
-                                {% if ccswitch_info.raw_model != ccswitch_info.sanitized_model %}
-                                <span class="badge bg-warning text-dark">已净化</span>
-                                {% endif %}
+                                <p><strong>配置载入时间：</strong><span id="runtime-config-loaded-at">{{ config_loaded_at }}</span></p>
+                                <p><strong>当前模型：</strong><code id="runtime-model">{{ runtime_model }}</code></p>
+                                <p><strong>API 地址：</strong><code id="runtime-base-url">{{ runtime_base_url }}</code></p>
+                                <p><strong>运行时状态：</strong>
+                                    <span id="runtime-status-badge" class="badge {% if runtime_ready %}bg-success{% else %}bg-danger{% endif %}">
+                                        {% if runtime_ready %}已就绪{% else %}未就绪{% endif %}
+                                    </span>
                                 </p>
-                                <p><strong>连接模式：</strong>{{ "代理模式" if ccswitch_info.is_proxy else "直连模式" }}</p>
-                                {% endif %}
+                                <p><strong>运行时建议：</strong><span id="runtime-hint">{{ "正常" if runtime_ready else "请检查配置并重载" }}</span></p>
+                                <p id="runtime-error-block"{% if not runtime_error %} class="d-none"{% endif %}>
+                                    <strong>运行时错误：</strong><code id="runtime-error">{{ runtime_error or "-" }}</code>
+                                </p>
+                                <p><strong>运行时进程统计：</strong><span id="runtime-uptime">{{ runtime_uptime_seconds }}秒</span></p>
+                                <p><strong>前端更新时间：</strong><span id="runtime-updated-at">{{ uptime }}</span></p>
+                                <div id="ccswitch-info-panel"{% if not ccswitch_info %} class="d-none"{% endif %}>
+                                    <p><strong>CCSwitch 原始模型：</strong><code id="ccswitch-raw-model">{% if ccswitch_info %}{{ ccswitch_info.raw_model }}{% else %}-{% endif %}</code>
+                                    <span id="ccswitch-sanitized-badge" class="{% if ccswitch_info and ccswitch_info.raw_model != ccswitch_info.sanitized_model %}badge bg-warning text-dark{% else %}d-none{% endif %}">已净化</span>
+                                    </p>
+                                    <p><strong>连接模式：</strong><span id="ccswitch-connection-mode">{% if ccswitch_info %}{{ "代理模式" if ccswitch_info.is_proxy else "直连模式" }}{% else %}-{% endif %}</span></p>
+                                    <p><strong>ccswitch 环境变量项：</strong><span id="ccswitch-env-count">{% if ccswitch_info and ccswitch_info.extra_env %}{{ ccswitch_info.extra_env|length }}{% else %}0{% endif %}</span>项</p>
+                                </div>
                             </div>
                         </div>
-                        {% if ccswitch_info and ccswitch_info.extra_env %}
                         <hr>
-                        <details>
-                            <summary class="text-muted" style="cursor:pointer;">ccswitch 完整环境变量 ({{ ccswitch_info.extra_env|length }} 项)</summary>
-                            <table class="table table-sm table-bordered mt-2" style="font-size: 0.85rem;">
-                                <thead><tr><th>变量名</th><th>值</th></tr></thead>
-                                <tbody>
-                                {% for key, val in ccswitch_info.extra_env.items() %}
-                                <tr>
-                                    <td><code>{{ key }}</code></td>
-                                    <td><code>{{ val | truncate(80, True) }}</code></td>
-                                </tr>
-                                {% endfor %}
-                                </tbody>
-                            </table>
-                        </details>
-                        {% endif %}
+                        <div id="ccswitch-env-details"{% if not ccswitch_info %} class="d-none"{% endif %}>
+                            <details>
+                                <summary id="ccswitch-env-summary" class="text-muted" style="cursor:pointer;">ccswitch 完整环境变量 (<span id="ccswitch-env-summary-count">{% if ccswitch_info and ccswitch_info.extra_env %}{{ ccswitch_info.extra_env|length }}{% else %}0{% endif %}</span> 项)</summary>
+                                <table class="table table-sm table-bordered mt-2" style="font-size: 0.85rem;">
+                                    <thead><tr><th>变量名</th><th>值</th></tr></thead>
+                                    <tbody id="ccswitch-env-body">
+                                    {% if ccswitch_info and ccswitch_info.extra_env %}
+                                    {% for key, val in ccswitch_info.extra_env.items() %}
+                                    <tr>
+                                        <td><code>{{ key }}</code></td>
+                                        <td><code>{{ val | truncate(80, True) }}</code></td>
+                                    </tr>
+                                    {% endfor %}
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="2" class="text-center text-muted">当前未检测到可展示的 ccswitch 环境变量</td>
+                                    </tr>
+                                    {% endif %}
+                                    </tbody>
+                                </table>
+                            </details>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -120,7 +137,7 @@
                                             </div>
                                         </td>
                                         <td>
-                                            <button class="btn btn-sm btn-info" onclick="showDetail('{{ record.question|tojson|safe }}', '{{ record.options|tojson|safe }}', '{{ record.answer|tojson|safe }}')">详情</button>
+                                            <button class="btn btn-sm btn-info" onclick='showDetail({{ record.question|tojson }}, {{ record.options|tojson }}, {{ record.answer|tojson }})'>详情</button>
                                         </td>
                                     </tr>
                                     {% endfor %}
@@ -152,85 +169,409 @@
                 <div class="modal-body">
                     <div class="mb-3">
                         <h6>问题：</h6>
-                        <pre class="border rounded p-3 bg-light" id="modal-question"></pre>
+                        <pre class="border rounded p-3 bg-light" id="modal-question" style="max-height: 320px; overflow: auto;"></pre>
                     </div>
                     <div class="mb-3">
                         <h6>选项：</h6>
-                        <pre class="border rounded p-3 bg-light" id="modal-options"></pre>
+                        <pre class="border rounded p-3 bg-light" id="modal-options" style="max-height: 220px; overflow: auto;"></pre>
                     </div>
                     <div class="mb-3">
                         <h6>答案：</h6>
-                        <pre class="border rounded p-3 bg-light" id="modal-answer"></pre>
+                        <pre class="border rounded p-3 bg-light" id="modal-answer" style="max-height: 220px; overflow: auto;"></pre>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/datatables.net@1.13.8/js/jquery.dataTables.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/datatables.net-bs5@1.13.8/js/dataTables.bootstrap5.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/datatables.net-responsive@2.5.0/js/dataTables.responsive.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/datatables.net-responsive-bs5@2.5.0/js/responsive.bootstrap5.min.js"></script>
+    <script src="/static/vendor/bootstrap/5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/vendor/jquery/3.7.1/dist/jquery.min.js"></script>
+    <script src="/static/vendor/datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+    <script src="/static/vendor/datatables.net-bs5/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+    <script src="/static/vendor/datatables.net-responsive/2.5.0/js/dataTables.responsive.min.js"></script>
+    <script src="/static/vendor/datatables.net-responsive-bs5/2.5.0/js/responsive.bootstrap5.min.js"></script>
 
     <script>
+    const tokenParameters = new URLSearchParams(window.location.search);
+    const accessToken = tokenParameters.get('token') || tokenParameters.get('access_token');
+    const BASE_REFRESH_INTERVAL_MS = 30000;
+    const MAX_REFRESH_INTERVAL_MS = 120000;
+    const MAX_FAILURE_BACKOFF_STEP = 3;
+    let runtimeRefreshTimer = null;
+    let runtimeRefreshIntervalMs = BASE_REFRESH_INTERVAL_MS;
+    let runtimeRefreshInFlight = false;
+    let runtimeFailureCount = 0;
+
+    function protectedFetch(url, options) {
+        const finalOptions = {...(options || {}), headers: {...(options && options.headers || {})}};
+        if (accessToken) {
+            if ((finalOptions.method || 'GET').toUpperCase() === 'POST') {
+                finalOptions.headers['Content-Type'] = 'application/json';
+                finalOptions.body = JSON.stringify({...JSON.parse(finalOptions.body || '{}'), token: accessToken});
+            } else if (/^[\x00-\x7F]*$/.test(accessToken)) {
+                finalOptions.headers['X-Access-Token'] = accessToken;
+            } else {
+                const target = new URL(url, window.location.origin);
+                target.searchParams.set('access_token', accessToken);
+                url = target.toString();
+            }
+        }
+        return fetch(url, finalOptions);
+    }
+
+    function parseJsonOrText(response) {
+        return response.text().then(text => {
+            const rawText = String(text || '').trim();
+            if ((response.status === 204 || response.status === 205) && !rawText) {
+                return {};
+            }
+            if (!rawText) {
+                if (response.ok) {
+                    return {};
+                }
+                return { __rawText: '', __isEmpty: true };
+            }
+            try {
+                return JSON.parse(rawText);
+            } catch (error) {
+                return { __rawText: rawText, __parseError: error ? error.message : 'JSON 解析失败' };
+            }
+        });
+    }
+
+    function requestJson(url, options) {
+        const controller = new AbortController();
+        let timeout;
+        const deadline = new Promise((resolve, reject) => {
+            timeout = setTimeout(() => {
+                controller.abort();
+                reject(new Error('请求超时，请检查服务状态后重试'));
+            }, 15000);
+        });
+        const operation = Promise.resolve().then(() => protectedFetch(url, {...(options || {}), signal: controller.signal})).then(response => {
+            return parseJsonOrText(response).then((data) => {
+                const isRawText = Boolean(data && Object.prototype.hasOwnProperty.call(data, '__rawText'));
+                if (!response.ok || isRawText) {
+                    const contentType = response.headers.get('content-type') || '未知';
+                    const reason = (response.statusText || '未知状态').trim();
+                    const snippet = String(data && data.__rawText || '').slice(0, 200).trim();
+                    const parseHint = data && data.__parseError ? `（解析错误: ${data.__parseError}）` : '';
+                    const message = isRawText
+                        ? `请求返回文本响应 (${url}) [${response.status} ${reason}]，内容类型: ${contentType}，${data.__isEmpty ? '内容为空' : '内容片段'}: ${snippet || '[无可读内容]'}${parseHint}`
+                        : ((data && (data.message || data.msg || data.error || data.detail)) || `请求失败 (${response.status} ${reason})`);
+                    const err = new Error(message);
+                    err.status = response.status;
+                    err.payload = data || {};
+                    throw err;
+                }
+                return data;
+            });
+        });
+        return Promise.race([operation, deadline]).finally(() => clearTimeout(timeout));
+    }
+
     $(document).ready(function() {
+        scheduleRuntimeStatusRefresh();
         $('#qa-records').DataTable({
             responsive: true,
             order: [[0, 'desc']],
             language: {
-                url: 'https://cdn.datatables.net/plug-ins/1.13.8/i18n/zh.json'
+                url: '/static/vendor/datatables-plugins/1.13.8/i18n/zh.json'
             },
             pageLength: 10,
             lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]]
         });
     });
 
+    function refreshRuntimeStatus() {
+        if (runtimeRefreshInFlight || document.hidden) {
+            return;
+        }
+        runtimeRefreshInFlight = true;
+        requestJson('/api/health')
+            .then(data => {
+                const runtimeReady = data && Object.prototype.hasOwnProperty.call(data, 'runtime_ready')
+                    ? Boolean(data.runtime_ready)
+                    : false;
+                const statusBadge = document.getElementById('runtime-status-badge');
+                const hint = document.getElementById('runtime-hint');
+                const configLoadedAt = document.getElementById('runtime-config-loaded-at');
+                const runtimeUptime = document.getElementById('runtime-uptime');
+                const updatedAt = document.getElementById('runtime-updated-at');
+                const configSourceNode = document.getElementById('runtime-config-source');
+                const runtimeModelNode = document.getElementById('runtime-model');
+                const runtimeBaseUrlNode = document.getElementById('runtime-base-url');
+                const ccswitchPanel = document.getElementById('ccswitch-info-panel');
+                const ccswitchEnvDetails = document.getElementById('ccswitch-env-details');
+                const ccswitchRawModel = document.getElementById('ccswitch-raw-model');
+                const ccswitchSanitizedBadge = document.getElementById('ccswitch-sanitized-badge');
+                const ccswitchModeNode = document.getElementById('ccswitch-connection-mode');
+                const ccswitchEnvCountNode = document.getElementById('ccswitch-env-count');
+                const ccswitchEnvSummaryCount = document.getElementById('ccswitch-env-summary-count');
+                const ccswitchEnvBody = document.getElementById('ccswitch-env-body');
+                const runtimeError = data && (data.runtime_error || data.error);
+                const cacheStatus = document.getElementById('runtime-cache-enabled');
+                const cacheSize = document.getElementById('runtime-cache-size');
+                if (cacheStatus) cacheStatus.textContent = data && data.cache_enabled ? '已启用' : '未启用';
+                if (cacheSize) cacheSize.textContent = data && Number.isFinite(data.cache_size) ? data.cache_size : '-';
+
+                if (!statusBadge || !hint || !runtimeModelNode || !runtimeBaseUrlNode || !configSourceNode) {
+                    runtimeRefreshInFlight = false;
+                    return;
+                }
+
+                const dataConfigSource = data && (data.config_source || 'unknown');
+                configSourceNode.textContent = dataConfigSource;
+                configSourceNode.classList.remove('bg-success', 'bg-secondary', 'bg-danger');
+                configSourceNode.classList.add(dataConfigSource === 'ccswitch' ? 'bg-success' : 'bg-secondary');
+
+                const truncateValue = (value, maxLength = 80) => {
+                    const text = value == null ? '' : String(value);
+                    return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+                };
+
+                const ccswitchEntries = (() => {
+                    const extraEnv = (data && data.ccswitch && data.ccswitch.extra_env) || {};
+                    if (extraEnv && typeof extraEnv === 'object' && !Array.isArray(extraEnv)) {
+                        return Object.entries(extraEnv);
+                    }
+                    return [];
+                })();
+
+                if (ccswitchEnvBody) {
+                    ccswitchEnvBody.innerHTML = '';
+                    if (ccswitchEntries.length === 0) {
+                        const emptyRow = document.createElement('tr');
+                        const emptyCell = document.createElement('td');
+                        emptyCell.colSpan = 2;
+                        emptyCell.className = 'text-center text-muted';
+                        emptyCell.textContent = '当前未检测到可展示的 ccswitch 环境变量';
+                        emptyRow.appendChild(emptyCell);
+                        ccswitchEnvBody.appendChild(emptyRow);
+                    } else {
+                        for (const [key, value] of ccswitchEntries) {
+                            const row = document.createElement('tr');
+                            const keyCell = document.createElement('td');
+                            const valueCell = document.createElement('td');
+                            const keyCode = document.createElement('code');
+                            const valueCode = document.createElement('code');
+                            keyCode.textContent = key;
+                            valueCode.textContent = truncateValue(value);
+                            keyCell.appendChild(keyCode);
+                            valueCell.appendChild(valueCode);
+                            row.appendChild(keyCell);
+                            row.appendChild(valueCell);
+                            ccswitchEnvBody.appendChild(row);
+                        }
+                    }
+                }
+
+                if (dataConfigSource === 'ccswitch') {
+                    const ccswitchData = (data && data.ccswitch) || {};
+                    if (ccswitchPanel) {
+                        ccswitchPanel.classList.remove('d-none');
+                    }
+                    if (ccswitchEnvDetails) {
+                        ccswitchEnvDetails.classList.remove('d-none');
+                    }
+                    if (ccswitchRawModel) {
+                        ccswitchRawModel.textContent = ccswitchData.raw_model || '-';
+                    }
+                    if (ccswitchSanitizedBadge) {
+                        if (ccswitchData.model_sanitized) {
+                            ccswitchSanitizedBadge.classList.remove('d-none');
+                        } else {
+                            ccswitchSanitizedBadge.classList.add('d-none');
+                        }
+                    }
+                    if (ccswitchModeNode) {
+                        ccswitchModeNode.textContent = ccswitchData.is_proxy ? '代理模式' : '直连模式';
+                    }
+                    const ccswitchConfigKeys = ccswitchData.config_keys || data.config_keys || [];
+                    const keyCount = Array.isArray(ccswitchConfigKeys) ? ccswitchConfigKeys.length : 0;
+                    if (ccswitchEnvCountNode) {
+                        ccswitchEnvCountNode.textContent = String(keyCount);
+                    }
+                    if (ccswitchEnvSummaryCount) {
+                        ccswitchEnvSummaryCount.textContent = String(keyCount);
+                    }
+                } else if (ccswitchPanel) {
+                    ccswitchPanel.classList.add('d-none');
+                    if (ccswitchEnvDetails) {
+                        ccswitchEnvDetails.classList.add('d-none');
+                    }
+                    if (ccswitchRawModel) {
+                        ccswitchRawModel.textContent = '-';
+                    }
+                    if (ccswitchModeNode) {
+                        ccswitchModeNode.textContent = '-';
+                    }
+                    if (ccswitchSanitizedBadge) {
+                        ccswitchSanitizedBadge.classList.add('d-none');
+                    }
+                    if (ccswitchEnvCountNode) {
+                        ccswitchEnvCountNode.textContent = '0';
+                    }
+                    if (ccswitchEnvSummaryCount) {
+                        ccswitchEnvSummaryCount.textContent = '0';
+                    }
+                }
+
+                statusBadge.classList.remove('bg-success', 'bg-danger', 'bg-warning');
+                if (runtimeReady) {
+                    statusBadge.classList.add('bg-success');
+                    statusBadge.textContent = '已就绪';
+                    hint.textContent = '正常';
+                } else {
+                    statusBadge.classList.add('bg-danger');
+                    statusBadge.textContent = '未就绪';
+                    hint.textContent = '请检查配置并重载';
+                }
+
+                if (runtimeModelNode) {
+                    runtimeModelNode.textContent = data.model || data.runtime_model || '-';
+                }
+                if (runtimeBaseUrlNode) {
+                    runtimeBaseUrlNode.textContent = data.base_url || data.runtime_base_url || '-';
+                }
+                if (configLoadedAt) {
+                    configLoadedAt.textContent = data.config_loaded_at || '-';
+                }
+                if (runtimeUptime) {
+                    const uptime = typeof data.uptime_seconds === 'number' ? data.uptime_seconds : 0;
+                    runtimeUptime.textContent = `${Math.floor(uptime)}秒`;
+                }
+                if (updatedAt) {
+                    updatedAt.textContent = new Date().toLocaleString();
+                }
+
+                let errorNode = document.getElementById('runtime-error');
+                let errorBlock = document.getElementById('runtime-error-block');
+                if (runtimeError) {
+                    errorBlock.classList.remove('d-none');
+                    if (errorNode) {
+                        errorNode.textContent = runtimeError;
+                    }
+                } else if (errorBlock) {
+                    errorBlock.classList.add('d-none');
+                }
+
+                if (runtimeFailureCount) {
+                    runtimeFailureCount = 0;
+                    if (runtimeRefreshIntervalMs !== BASE_REFRESH_INTERVAL_MS) {
+                        runtimeRefreshIntervalMs = BASE_REFRESH_INTERVAL_MS;
+                        scheduleRuntimeStatusRefresh();
+                    }
+                }
+            })
+            .catch((error) => {
+                const statusBadge = document.getElementById('runtime-status-badge');
+                const hint = document.getElementById('runtime-hint');
+                const errorNode = document.getElementById('runtime-error');
+                const errorBlock = document.getElementById('runtime-error-block');
+                if (statusBadge) {
+                    statusBadge.classList.remove('bg-success', 'bg-danger', 'bg-warning');
+                    statusBadge.classList.add('bg-warning');
+                    statusBadge.textContent = '未知';
+                }
+                if (hint) {
+                    hint.textContent = '当前网络不可达或返回无效';
+                }
+                if (statusBadge && error && error.status === 403) {
+                    hint.textContent = '访问令牌无效，请检查 URL 中 token';
+                }
+                if (errorNode && errorBlock) {
+                    errorBlock.classList.remove('d-none');
+                    errorNode.textContent = (error && error.message) || '健康检查接口调用失败，请检查网络与鉴权';
+                }
+                runtimeFailureCount += 1;
+                const backoffStep = Math.min(runtimeFailureCount, MAX_FAILURE_BACKOFF_STEP);
+                const targetInterval = Math.min(
+                    BASE_REFRESH_INTERVAL_MS * Math.pow(2, backoffStep),
+                    MAX_REFRESH_INTERVAL_MS
+                );
+                if (targetInterval !== runtimeRefreshIntervalMs) {
+                    runtimeRefreshIntervalMs = targetInterval;
+                    scheduleRuntimeStatusRefresh();
+                }
+            })
+            .finally(() => {
+                runtimeRefreshInFlight = false;
+            });
+    }
+
+    function scheduleRuntimeStatusRefresh() {
+        if (runtimeRefreshTimer) {
+            clearInterval(runtimeRefreshTimer);
+            runtimeRefreshTimer = null;
+        }
+        runtimeRefreshTimer = setInterval(refreshRuntimeStatus, runtimeRefreshIntervalMs);
+        refreshRuntimeStatus();
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            refreshRuntimeStatus();
+        }
+    });
+
     function clearCache() {
         if (confirm('确定要清除所有缓存吗？')) {
-            fetch('/api/cache/clear', {
+            requestJson('/api/cache/clear', {
                 method: 'POST',
             })
-            .then(response => response.json())
             .then(data => {
-                if (data.success) {
+                const opSuccess = data && Object.prototype.hasOwnProperty.call(data, 'success') ? Boolean(data.success) : true;
+                if (opSuccess) {
                     alert('缓存已清除');
-                    location.reload();
+                    refreshRuntimeStatus();
                 } else {
-                    alert('清除缓存失败: ' + data.message);
+                    alert('清除缓存失败: ' + (data && data.message || '服务器未返回成功状态'));
+                    refreshRuntimeStatus();
                 }
             })
             .catch(error => {
-                alert('操作失败: ' + error);
+                alert('操作失败: ' + (error.message || error));
+                refreshRuntimeStatus();
             });
         }
     }
 
     function reloadConfig() {
         if (confirm('确定要重新加载 ccswitch 配置吗？')) {
-            fetch('/api/config/reload', {
+            requestJson('/api/config/reload', {
                 method: 'POST',
             })
-            .then(response => response.json())
             .then(data => {
-                if (data.success) {
-                    alert(data.message + '\n模型: ' + data.model + '\n来源: ' + data.config_source);
-                    location.reload();
+                const opSuccess = data && Object.prototype.hasOwnProperty.call(data, 'success') ? Boolean(data.success) : true;
+                if (opSuccess) {
+                    const runtimeReady = data && data.runtime_ready;
+                    const statusText = runtimeReady ? '运行时已就绪' : '运行时未就绪';
+                    const extra = runtimeReady
+                        ? ''
+                        : ('\n运行时错误: ' + (data && (data.runtime_error || data.error) || '请查看上方状态'));
+                    alert((data && (data.message || '配置重载完成')) + '\n模型: ' + (data && (data.model || data.runtime_model || '-')) + '\n来源: ' + (data && (data.config_source || '-')) + '\n' + statusText + extra);
+                    refreshRuntimeStatus();
                 } else {
-                    alert('重载失败: ' + data.message);
+                    alert('重载失败: ' + (data && data.message || '配置重载失败'));
+                    refreshRuntimeStatus();
                 }
             })
             .catch(error => {
-                alert('操作失败: ' + error);
+                alert('操作失败: ' + (error.message || error));
+                refreshRuntimeStatus();
             });
         }
     }
 
     function showDetail(question, options, answer) {
-        document.getElementById('modal-question').textContent = question;
-        document.getElementById('modal-options').textContent = options || '无';
-        document.getElementById('modal-answer').textContent = answer;
+        const safeText = (value) => {
+            const text = (value === null || value === undefined) ? '无' : String(value);
+            return text.length > 30000 ? `${text.slice(0, 30000)}\n\n[已截断：内容较长，已省略 ${text.length - 30000} 字符]` : text;
+        };
+        document.getElementById('modal-question').textContent = safeText(question);
+        document.getElementById('modal-options').textContent = safeText(options);
+        document.getElementById('modal-answer').textContent = safeText(answer);
         new bootstrap.Modal(document.getElementById('detailModal')).show();
     }
     </script>

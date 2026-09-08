@@ -1,5 +1,6 @@
-# 使用Python 3.9作为基础镜像
-FROM python:3.9-slim
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
 # 设置工作目录
 WORKDIR /app
@@ -8,12 +9,11 @@ WORKDIR /app
 COPY requirements.txt .
 
 # 安装依赖
-RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    pip install --no-cache-dir -r requirements.txt && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制所有文件到容器
-COPY . .
+COPY app.py config.py ccswitch.py utils.py logger.py portable_paths.py provider_clients.py api_docs.md LICENSE gunicorn.conf.py healthcheck.py ./
+COPY templates ./templates
+COPY static ./static
 
 # 创建日志目录
 RUN mkdir -p logs
@@ -21,5 +21,6 @@ RUN mkdir -p logs
 # 暴露端口
 EXPOSE 5000
 
-# 默认命令
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--limit-request-line", "16380", "app:app"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["python", "healthcheck.py"]
+
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "app:app"]

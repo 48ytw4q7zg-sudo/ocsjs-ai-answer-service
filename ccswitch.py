@@ -56,12 +56,14 @@ def extract_all_env(settings: dict) -> Dict[str, str]:
 
     用于完整展示 ccswitch 当前配置，方便调试和仪表盘展示。
     """
+    if not isinstance(settings, dict):
+        return {}
     env = settings.get("env")
     if not isinstance(env, dict):
         return {}
     result = {}
     for key in _ENV_KEYS:
-        val = (env.get(key) or "").strip()
+        val = _text_value(env.get(key))
         if val:
             result[key] = val
     return result
@@ -80,6 +82,10 @@ def _load_full_config(config: dict) -> dict:
     except Exception:
         config["extra_env"] = {}
     return config
+
+
+def _text_value(value) -> str:
+    return value.strip() if isinstance(value, str) else ''
 
 
 def get_ccswitch_config(settings_path: Optional[Path] = None) -> Optional[Dict[str, str]]:
@@ -109,17 +115,20 @@ def get_ccswitch_config(settings_path: Optional[Path] = None) -> Optional[Dict[s
     try:
         content = settings_path.read_text(encoding="utf-8")
         settings = json.loads(content)
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, OSError, UnicodeError) as e:
         logger.warning(f"读取 settings.json 失败: {e}")
         return None
 
+    if not isinstance(settings, dict):
+        logger.warning('settings.json 必须是 JSON 对象')
+        return None
     env = settings.get("env")
     if not isinstance(env, dict) or not env:
         logger.debug("settings.json 中无 env 配置")
         return None
 
-    api_key = (env.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
-    base_url = (env.get("ANTHROPIC_BASE_URL") or "").strip()
+    api_key = _text_value(env.get("ANTHROPIC_AUTH_TOKEN"))
+    base_url = _text_value(env.get("ANTHROPIC_BASE_URL"))
 
     if not api_key:
         logger.debug("settings.json 中 ANTHROPIC_AUTH_TOKEN 为空")
@@ -164,20 +173,20 @@ def _resolve_model(settings: dict, env: dict) -> str:
     5. 硬编码默认值
     """
     # 第 1 级：通用模型名
-    direct = (env.get("ANTHROPIC_MODEL") or "").strip()
+    direct = _text_value(env.get("ANTHROPIC_MODEL"))
     if direct:
         return direct
 
     # 第 2-3 级：按当前 model 选择对应的专用名称
-    selected = settings.get("model", "opus")
+    selected = _text_value(settings.get("model")) or 'opus'
     key_map = {
-        "opus":   ("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", "ANTHROPIC_DEFAULT_OPUS_MODEL"),
-        "sonnet": ("ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", "ANTHROPIC_DEFAULT_SONNET_MODEL"),
-        "haiku":  ("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+        "opus":   ("ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"),
+        "sonnet": ("ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"),
+        "haiku":  ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"),
     }
     keys = key_map.get(selected, key_map["opus"])
     for k in keys:
-        val = (env.get(k) or "").strip()
+        val = _text_value(env.get(k))
         if val:
             return val
 
@@ -189,7 +198,7 @@ def _resolve_model(settings: dict, env: dict) -> str:
         "ANTHROPIC_REASONING_MODEL",
     ]
     for k in backup_keys:
-        val = (env.get(k) or "").strip()
+        val = _text_value(env.get(k))
         if val:
             return val
 

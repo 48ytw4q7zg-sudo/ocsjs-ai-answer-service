@@ -36,7 +36,8 @@
 - **增强提示词** (v2.2.0): 题目+选项+题型指令强制合并为一条完整提示词，AI 基于实际选项作答
 - **防混淆策略** (v2.2.0): 提示词明确告知选项顺序可能被打乱，要求 AI 比对选项内容而非凭记忆
 - **空答案自动重试** (v2.2.0): AI 返回空文本时自动降温(T=0.3)重试一次
-- **全题型答案清洗** (v2.2.0): 自动去除"答案："等前缀、选项字母前缀(B./A.)、尾标点；判断题中英文标准化
+- **全题型答案清洗** (v2.2.0): 自动去除"答案："等前缀、尾标点；单选/多选可按当前 options 把 A/B/C 字母答案映射为真实选项文本；单选可剥离模型附带的简短解释；判断题中英文标准化
+- **OCS 请求兼容**: `/api/search` 支持 GET、表单、标准 `application/json` 与 `application/*+json`；题干字段兼容 `title`/`question`/`q`/`content`/`text`，题型字段兼容 `type`/`questionType`/`question_type`，选项字段兼容 `options`/`choices`/`answers` 等常见别名；选项支持字符串、字符串数组、对象数组（如 `{label,text}`）或键值对象（如 `{A:"上海"}`），会统一换行、去除空行和首尾空格，减少重复缓存和选项解析误差
 - **Docker 部署**: 提供 Dockerfile + docker-compose.yml，支持容器化运行
 
 ---
@@ -50,6 +51,8 @@
 ---
 
 ## 快速开始
+
+当前运行时恢复、缓存与答案处理、页面认证的说明及验证边界见 [功能完整性记录](docs/functional-completion.md)。缺少可用 AI 配置时首页与健康接口仍可访问；配置重载失败会保留原运行时。首页可填写访问令牌，令牌通过请求体传递。
 
 ### 1. 克隆代码库
 
@@ -251,7 +254,7 @@ CLAUDE_CODE_EFFORT_LEVEL, ENABLE_TOOL_SEARCH,
 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 ```
 
-这些键值对应仪表盘的 "ccswitch 完整环境变量" 可折叠面板。
+这些键名会出现在仪表盘的 "ccswitch 环境变量" 可折叠面板；`TOKEN`、`KEY`、`SECRET`、`PASSWORD`、`AUTH` 等敏感字段的值会被隐藏。
 
 **`reload_ccswitch_config()` 运行时重载** (v2.1.0 新增):
 
@@ -383,7 +386,7 @@ Flask Web 服务主文件，是整个系统的中枢。
 | 路由 | 方法 | 函数 | 功能 | 令牌验证 |
 |------|------|------|------|:---:|
 | `/` | GET | `index()` | 返回问答测试首页 `index.html`（传递 version 变量） | — |
-| `/dashboard` | GET | `dashboard()` | 返回仪表盘页面（含 ccswitch 详情 + 环境变量面板） | — |
+| `/dashboard` | GET | `dashboard()` | 返回仪表盘页面（含 ccswitch 详情 + 环境变量面板） | ACCESS_TOKEN（如已配置） |
 | `/docs` | GET | `docs()` | 读取 `api_docs.md` 并用 `markdown` 库渲染为 HTML | — |
 | `/api/search` | GET/POST | `search()` | 核心搜索接口，调用 AI 生成答案 | ✓ |
 | `/api/health` | GET | `health_check()` | 健康检查（含 ccswitch 净化信息 + config_keys） | — |
@@ -399,13 +402,13 @@ Flask Web 服务主文件，是整个系统的中枢。
   ├─ 1. verify_access_token() 令牌验证 (Header / URL 参数)
   │
   ├─ 2. 参数提取（按请求方法）
-  │      GET  → request.args.get()
-  │      POST → Content-Type: application/json → request.get_json(silent=True)
-  │      POST → 其他 Content-Type → request.form
+  │      GET  → request.args，支持题干/题型/选项字段别名
+  │      POST → request.is_json 为真（application/json 或 application/*+json）→ request.get_json(silent=True)
+  │      POST → 其他 Content-Type → request.form，支持题干/题型/选项字段别名
   │
   ├─ 3. 参数校验
-  │      title 为空 → code:0 + 错误消息
-  │      title 长度 > MAX_QUESTION_LENGTH → code:0 + 400
+  │      题干别名字段都为空 → code:0 + 错误消息
+  │      题目长度 > MAX_QUESTION_LENGTH → code:0 + 400
   │
   ├─ 4. 缓存查询 → cache.get(question, type, options)
   │      命中 → 直接返回缓存答案（跳过 AI 调用）
@@ -423,7 +426,7 @@ Flask Web 服务主文件，是整个系统的中枢。
   │      空响应 → _call_ai 自动重试 (v2.2.0)
   │
   ├─ 8. extract_answer() 后处理格式 (v2.2.0 增强)
-  │      去答案前缀 + 去尾标点 + 单选去选项字母 + 判断标准化 + 多选 # 分隔
+  │      options 统一标准化 + 去答案前缀 + 去尾标点 + 单选/多选字母映射到选项文本 + 单选解释剥离 + 判断标准化 + 多选 # 分隔
   │
   ├─ 9. cache.set() 写入缓存
   │
@@ -517,7 +520,7 @@ ccswitch_info = {
     'sanitized_model': Config.ANTHROPIC_MODEL,      # 净化后模型名
     'is_proxy': Config.CCSWITCH_IS_PROXY,           # 是否代理模式
     'base_url': Config.ANTHROPIC_BASE_URL,          # API 地址
-    'extra_env': Config.EXTRA_ENV,                  # 完整 14 项 env 字典
+    'extra_env': _mask_sensitive_config(Config.EXTRA_ENV),  # 隐藏敏感值后的 env 字典
 }
 ```
 
@@ -525,7 +528,7 @@ ccswitch_info = {
 - 配置来源 badge（ccswitch=绿色，.env=灰色）
 - ccswitch 原始模型名 + 已净化标签
 - 连接模式（代理/直连）
-- ccswitch 完整环境变量可折叠面板（14 项）
+- ccswitch 环境变量可折叠面板（敏感值隐藏）
 - 「重载配置」按钮
 
 **启动入口**:
@@ -586,6 +589,15 @@ def _evict_one(self):
 
 包装为 OCS 标准格式：`{'code': 1, 'question': question, 'answer': answer}`。
 
+##### `normalize_options(options)` → `str`
+
+把 `/api/search` 收到的选项统一为换行字符串。GET/Form 默认是字符串；POST JSON 可传字符串数组、对象数组或键值对象，例如 `["A. 上海", "B. 北京"]`、`[{"label":"A","text":"上海"},{"label":"B","text":"北京"}]`、`{"A":"上海","B":"北京"}` 都会转换为：
+
+```text
+A. 上海
+B. 北京
+```
+
 ##### `parse_question_and_options(question, options, question_type)` → `str`
 
 构建 AI 提示词。拼接三段式结构：
@@ -606,21 +618,31 @@ def _evict_one(self):
 | `judgement` | `这是一道判断题，需要回答：正确/对/true/√ 或者 错误/错/false/×。` |
 | `completion` | `这是一道填空题。` |
 
-##### `extract_answer(ai_response, question_type)` → `str`
+##### `extract_answer(ai_response, question_type, options="")` → `str`
 
-AI 答案后处理。**仅多选题做格式转换**。
+AI 答案后处理。会结合本次题目的 `options` 把模型返回的选项字母转换为真实选项文本，避免选项顺序变化时把 `A`、`B` 直接返回给 OCS。
 
 ```
-非多选 → 直接返回原始文本
+通用清洗:
+  ├─ 去除“答案：”“Answer:”等前缀
+  ├─ 去除尾部标点
+  └─ 解析 options 中 A-H 对应的选项文本
+
+单选处理:
+  ├─ "B. 北京" → "北京"
+  └─ "B" + 当前 options → "北京"
 
 多选处理:
-  ├─ text.strip() 为空 → 返回空
   ├─ 包含 '#' → _normalize_hash_separated() 标准化
-  └─ 不含 '#' → _detect_letters() 检测选项字母
+  ├─ 不含 '#' → _detect_letters() 检测选项字母
         ├─ 模式1: 连续字母 "ABC" → "A#B#C"
         ├─ 模式2: 按行扫描 ≤8 字符的行 → 纯字母行 → # 分隔
         ├─ 模式3: 提取所有 A-H 字母 → 去重按 A-H 顺序排列 → # 分隔
         └─ 均不匹配 → 返回原始文本
+  └─ "A#C" + 当前 options → "北京#广州"
+
+判断题处理:
+  └─ true/√/对 → 正确；false/×/错 → 错误
 ```
 
 ##### `_normalize_hash_separated(text)` → `str`
@@ -781,7 +803,7 @@ function escapeHtml(text) {
 | `sanitized_model` | 净化后模型名 |
 | `is_proxy` | 是否代理模式 |
 | `base_url` | API 地址 |
-| `extra_env` | 完整 env 字典（14 项） |
+| `extra_env` | 已隐藏敏感值的 env 字典 |
 
 **DOM 结构**:
 
@@ -797,7 +819,7 @@ function escapeHtml(text) {
     ├─ 运行时长
     ├─ CCSwitch 原始模型 (code + 已净化 badge)
     └─ 连接模式 (代理/直连)
-  v2.1.0: ccswitch 完整环境变量可折叠面板 (14 项 key-value 表)
+  v2.1.0: ccswitch 环境变量可折叠面板（敏感值隐藏）
 
 问答记录卡片
   ├─ 标题 + "重载配置" 按钮 (v2.1.0) + "清除缓存" 按钮
@@ -995,9 +1017,9 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染（�
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|:----:|------|
-| title | string | 是 | 题目内容（最大 2000 字符） |
-| type | string | 否 | single / multiple / judgement / completion |
-| options | string | 否 | 选项文本 |
+| title / question / q / content / text | string | 是 | 题目内容（最大 2000 字符）；`title` 为 OCS 原字段，二者同时存在时优先使用靠前的非空字段 |
+| type / questionType / question_type / qtype / category / kind | string/number | 否 | single / multiple / judgement / completion；也兼容 1/2/3/4 数字题型 |
+| options / choices / answers / answerOptions / option / opts | string/array/object | 否 | 选项文本；POST JSON 请求体必须是对象，支持 `application/json` 和 `application/*+json`；选项可传字符串、字符串数组、对象数组或键值对象 |
 
 **成功** `{"code": 1, "question": "...", "answer": "..."}`
 
@@ -1007,7 +1029,7 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染（�
 
 | HTTP 状态 | 说明 |
 |-----------|------|
-| 400 | 请求参数错误（空问题、过长问题、无效 JSON） |
+| 400 | 请求参数错误（空问题、过长问题、无效 JSON、非对象 JSON 请求体） |
 | 403 | 令牌验证失败 |
 | 500 | 服务内部错误 |
 | 502 | 无法连接到 AI 服务 |
@@ -1061,7 +1083,7 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染（�
 | 路由 | 功能 | 说明 |
 |------|------|------|
 | `/` | 问答测试 | Bootstrap 5 表单 + Axios 调用 `/api/search` + XSS 防护 |
-| `/dashboard` | 统计面板 | Jinja2 渲染 + DataTables + ccswitch 详情面板 + 重载/清除按钮 |
+| `/dashboard` | 统计面板 | Jinja2 渲染 + DataTables + ccswitch 详情面板 + 重载/清除按钮；设置 `ACCESS_TOKEN` 后通过 `/dashboard?token=<token>` 访问 |
 | `/docs` | API 文档 | `api_docs.md` 渲染为 HTML |
 
 ---
@@ -1076,8 +1098,9 @@ Markdown 格式 API 文档，被 `app.py` 的 `/docs` 路由读取并渲染（�
 | `/api/cache/clear` | 同上 |
 | `/api/stats` | 同上 |
 | `/api/config/reload` (v2.1.0) | 同上 |
+| `/dashboard` | 浏览器访问 `/dashboard?token=<token>` |
 
-> `/`、`/dashboard`、`/docs`、`/api/health` 不受令牌保护。
+> `/`、`/docs`、`/api/health` 不受令牌保护；`/dashboard` 仅在设置 `ACCESS_TOKEN` 后要求令牌。
 
 ---
 
@@ -1181,9 +1204,10 @@ docker-compose up -d
 - **新增**: 全题型答案清洗 (`extract_answer`)
   - 自动去除「答案：」「答案是」「Answer:」等前缀
   - 自动去除尾部标点（。！；，）
-  - 单选：去除「B. 北京」→「北京」的选项字母前缀
+  - 单选：去除「B. 北京」→「北京」的选项字母前缀；当 AI 返回「B，因为...」或「北京，因为...」时仍归一化为选项文本
+  - 单选/多选：当 AI 只返回 `B` 或 `A#C` 时，按当前 `options` 映射为「北京」或「北京#广州」
   - 判断：正确/对/true/√/yes→「正确」，错误/错/false/×/no→「错误」
-  - 多选：逗号/空格分隔的答案自动转 # 格式
+  - 多选：逗号/空格分隔的答案自动转 # 格式；`A. 北京, C. 广州` 或分行选项前缀会稳定清洗为 `北京#广州`
 - **新增**: 详细日志（API 提示词、答案内容、是否有选项）
 - **修复**: `str | None` 类型注解改为 Python 3.7+ 兼容写法
 - **修复**: SYSTEM_PROMPT 与 _build_instructions 指令一致性对齐
@@ -1193,7 +1217,7 @@ docker-compose up -d
 - **新增**: 模型名自动净化 (`_sanitize_model_name()`) — 去除 `[1M]`/`[200K]` 等后缀
 - **新增**: 运行时配置重载 (`/api/config/reload` 端点 + `reload_config()`)
 - **新增**: 完整 ccswitch env 提取 (`extract_all_env()` — 14 个键)
-- **新增**: 仪表盘 ccswitch 详情面板（原始模型/连接模式/完整 env 表）
+- **新增**: 仪表盘 ccswitch 详情面板（原始模型/连接模式/env 表；敏感值隐藏）
 - **新增**: `build_ai_client()` 函数 — 配置重载时重建客户端
 - **新增**: 健康检查返回 `ccswitch` 子对象（raw_model/is_proxy/model_sanitized/config_keys）
 - **新增**: 统计接口返回 `base_url`/`ccswitch_raw_model`/`ccswitch_is_proxy`
@@ -1231,11 +1255,13 @@ AI 生成答案可能有偏差，以人工判断为准。
 
 ### 多选答案格式
 
-OCS 期望 `#` 分隔格式。`utils.py:extract_answer()` 通过 4 种模式自动转换：
+OCS 期望 `#` 分隔格式。`utils.py:extract_answer()` 通过 4 种模式自动转换，并在提供 `options` 时把字母答案映射为真实选项文本：
 1. 直接 `#` 分隔检测
 2. 连续字母 "ABC" 模式
 3. 逐行扫描纯字母行
 4. 全文本 A-H 字母提取
+
+例如：模型返回 `A,C,D`，当前选项为 `A. 北京 / C. 广州 / D. 深圳`，最终返回 `北京#广州#深圳`。
 
 ### Docker 容器访问宿主机 ccswitch
 
