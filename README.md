@@ -750,6 +750,7 @@ python health_smoke.py --check-protected
 - `--token` 自定义探测 token（默认读取 `ACCESS_TOKEN`）
 - `--check-protected` 启用时要求 ACCESS_TOKEN 存在时匿名请求返回 `details=protected`
 - `--timeout` HTTP 请求超时时间（单位秒，默认 `3`）
+- `--require-ready` 要求返回中的 `runtime_ready` 为 `true`
 - `--dump` 输出完整 JSON 报告到标准输出
 
 可用退出码：
