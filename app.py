@@ -112,18 +112,18 @@ def _extract_access_token(req):
 
     token = req.args.get('token') or req.args.get('access_token')
     if token:
-        return token
+        return str(token).strip()
 
     token = req.form.get('token') or req.form.get('access_token')
     if token:
-        return token
+        return str(token).strip()
 
     if req.is_json:
         data = req.get_json(silent=True)
         if isinstance(data, dict):
             token = data.get('token') or data.get('access_token')
             if token:
-                return token
+                return str(token).strip()
     return None
 
 
