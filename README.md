@@ -109,6 +109,13 @@ python app.py
 
 服务默认运行在 `http://localhost:5000`
 
+### 4.1 健康检查探测（可选）
+
+```bash
+# 服务启动后执行一次完整性探针
+python health_smoke.py --host 127.0.0.1 --port 5000
+```
+
 ### 5. 在 OCS 中配置使用
 
 ```json
@@ -141,6 +148,7 @@ ocsjs-ai-answer-service/
 ├── utils.py                # 工具函数 (线程安全缓存 / 答案格式化 / 答案提取)
 ├── logger.py               # 日志模块 (RotatingFileHandler 轮转 + Windows UTF-8 修复)
 ├── test_service.py         # 服务测试脚本 (7 项测试覆盖)
+├── health_smoke.py         # 健康检查冒烟脚本（独立执行，最小探活）
 ├── requirements.txt        # Python 依赖清单 (6 包)
 ├── Dockerfile              # Docker 镜像构建文件 (8 层)
 ├── docker-compose.yml      # Docker Compose 编排文件 (含健康检查)
@@ -719,7 +727,36 @@ main()
 
 ### 二、前端模板详解
 
-#### 7. `templates/index.html` — 问答测试首页
+#### 7. `health_smoke.py` — 健康检查冒烟脚本
+
+用于服务启动后进行单步健康探测，不依赖第三方账号，支持 token 明细分支验证。  
+脚本会检测 `/api/health` 的可达性、`runtime_ready` 布尔字段和受保护字段策略。  
+建议将本脚本作为发布前“最小功能完整性”检查之一。
+
+**主流程**:
+
+```bash
+# 启动服务后执行：
+python health_smoke.py --host 127.0.0.1 --port 5000
+
+# 配置 ACCESS_TOKEN 后，可同时验证匿名降级行为
+set ACCESS_TOKEN=you-token        # Windows PowerShell: $env:ACCESS_TOKEN="you-token"
+python health_smoke.py --check-protected
+```
+
+参数摘要：
+- `--host` 服务监听主机（默认 `0.0.0.0`）
+- `--port` 服务端口（默认 `5000`）
+- `--token` 自定义探测 token（默认读取 `ACCESS_TOKEN`）
+- `--check-protected` 启用时要求 ACCESS_TOKEN 存在时匿名请求返回 `details=protected`
+- `--timeout` HTTP 请求超时时间（单位秒，默认 `3`）
+- `--dump` 输出完整 JSON 报告到标准输出
+
+可用退出码：
+- `0`：所有检测通过  
+- `1`：任意检测失败（连接失败、返回结构不符）
+
+#### 8. `templates/index.html` — 问答测试首页
 
 **CDN 依赖**: Bootstrap 5.3 CSS + Axios
 
