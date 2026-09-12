@@ -22,6 +22,72 @@ function loadDashboard(search, fetchImpl) {
     return {context,timers};
 }
 
+async function testDashboardActions() {
+    let scenarios = 0;
+    const actions = [['clearCache', '/api/cache/clear'], ['reloadConfig', '/api/config/reload']];
+    for (const [action, expectedPath] of actions) {
+        for (const explicitToken of ['', '\u4e2d\u6587\u4ee4\u724c']) {
+            const calls = [], alerts = [];
+            let refreshes = 0;
+            const page = loadDashboard(explicitToken ? '?access_token=' + encodeURIComponent(explicitToken) : '', async (url, options) => {
+                calls.push({url, options});
+                return {ok:true, status:200, statusText:'OK', headers:{get:()=> 'application/json'}, text:async()=>'{"success":true,"runtime_ready":true}'};
+            });
+            page.context.confirm = () => true;
+            page.context.alert = message => alerts.push(message);
+            page.context.refreshRuntimeStatus = () => refreshes++;
+            page.context[action]();
+            await new Promise(resolve => setImmediate(resolve));
+            assert.equal(calls.length, 1, action);
+            assert.equal(new URL(calls[0].url, 'http://localhost').pathname, expectedPath);
+            assert.equal(calls[0].options.method, 'POST');
+            if (explicitToken) assert.equal(JSON.parse(calls[0].options.body).token, explicitToken);
+            assert.equal(alerts.length, 1, action);
+            assert.doesNotMatch(alerts[0], /\u5931\u8d25/, action);
+            assert.equal(refreshes, 1, action);
+            assert.equal(page.timers.size, 0, action);
+            scenarios++;
+        }
+
+        const cancelledCalls = [];
+        const cancelled = loadDashboard('', async (...args) => cancelledCalls.push(args));
+        cancelled.context.confirm = () => false;
+        cancelled.context.alert = () => {throw new Error('Cancelled action must not alert');};
+        cancelled.context[action]();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(cancelledCalls.length, 0, action);
+        assert.equal(cancelled.timers.size, 0, action);
+        scenarios++;
+
+        for (const response of [
+            {ok:true, status:200, statusText:'OK', headers:{get:()=> 'application/json'}, text:async()=>'{"success":false,"message":"synthetic_failure"}'},
+            {ok:false, status:503, statusText:'Service Unavailable', headers:{get:()=> 'application/json'}, text:async()=>'{"error":"synthetic_failure"}'}
+        ]) {
+            const alerts = [];
+            let calls = 0, refreshes = 0;
+            const failed = loadDashboard('', async () => {calls++; return response;});
+            failed.context.confirm = () => true;
+            failed.context.alert = message => alerts.push(message);
+            failed.context.refreshRuntimeStatus = () => refreshes++;
+            failed.context[action]();
+            await new Promise(resolve => setImmediate(resolve));
+            assert.equal(calls, 1, action);
+            assert.equal(alerts.length, 1, action);
+            assert.match(alerts[0], /\u5931\u8d25/, action);
+            assert.match(alerts[0], /synthetic_failure/, action);
+            assert.equal(refreshes, 1, action);
+            assert.equal(failed.timers.size, 0, action);
+            if (response.status === 503) {
+                await assert.rejects(failed.context.requestJson(expectedPath, {method:'POST'}), error =>
+                    error.status === 503 && error.message === 'synthetic_failure');
+                assert.equal(failed.timers.size, 0, action);
+            }
+            scenarios++;
+        }
+    }
+    return scenarios;
+}
+
 async function main() {
     const calls=[];
     const ok=async(url,options)=>{calls.push({url,options}); return {ok:true,status:200,headers:{get:()=> 'application/json'},text:async()=>'{"success":true}'};};
@@ -42,6 +108,7 @@ async function main() {
         await rejected;
         assert.equal(stalled.timers.size,0);
     }
-    console.log('PASS: dashboard token aliases, Unicode transport, request/body timeouts and cleanup');
+    const actionScenarios = await testDashboardActions();
+    console.log(`PASS: dashboard token aliases, Unicode transport, request/body timeouts, cleanup and ${actionScenarios} action scenarios`);
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

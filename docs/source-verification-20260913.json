@@ -1,0 +1,124 @@
+{
+  "schema_version": "source-verification/v1",
+  "date_local": "2026-09-13",
+  "timezone": "Asia/Singapore",
+  "project": "48ytw4q7zg-sudo/ocsjs-ai-answer-service",
+  "status": "source-verified-build-blocked",
+  "scope": "Source-level optimization, regression and independent review; not frozen-release acceptance.",
+  "target_branch": "main",
+  "github_push_allowed": true,
+  "github_uploaded": false,
+  "optimization_scope_result": "All reproduced actionable findings in the reviewed code paths were closed.",
+  "review_harness": "Codex only",
+  "requested_model": "gpt-6-astra",
+  "requested_reasoning_effort": "max",
+  "model_eligibility_reference": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+  "review_runs": [
+    {
+      "id": "01a0955d-c459-7a63-af6c-351563bea4b9",
+      "role": "Independent source, integrity, metadata and batch review",
+      "selection": "Inherited Codex GPT-6/max"
+    },
+    {
+      "id": "01a0956c-2cbd-7660-a0e1-1027b74f88a9",
+      "role": "Independent OCS protocol review; battery implementation/source tests",
+      "selection": "Explicit gpt-6-astra/max"
+    },
+    {
+      "id": "01a09563-0445-7371-8149-441aa67c0859",
+      "role": "OCS implementation/regressions and independent health review",
+      "selection": "Inherited Codex GPT-6/max"
+    }
+  ],
+  "validations": [
+    {
+      "name": "existing_backend_suites",
+      "passed": 85,
+      "excluded": 1,
+      "note": "One .env.example documentation assertion excluded; no live credential-file or real-network access."
+    },
+    {
+      "name": "server_release_safety",
+      "passed": 21
+    },
+    {
+      "name": "independent_protocol_scenarios",
+      "passed": 41,
+      "unit": "scenarios"
+    },
+    {
+      "name": "health_smoke",
+      "passed": 18
+    },
+    {
+      "name": "independent_health_cli_scenarios",
+      "passed": 10,
+      "unit": "scenarios"
+    },
+    {
+      "name": "snapshot_integrity_and_waiver",
+      "passed": 19
+    },
+    {
+      "name": "source_batch_launcher",
+      "passed": 4
+    },
+    {
+      "name": "dashboard_actions",
+      "passed": 10,
+      "unit": "scenarios",
+      "note": "Token, request/body timeout and timer-cleanup regressions also passed."
+    }
+  ],
+  "reviewed_hashes_sha256": {
+    "app.py": "3b05be7190c034e6fb894983c3733ea71dcdd6827bcb4dc724c603e5f28cdf08",
+    "provider_clients.py": "4e5e5bfabadc83e7da7da091cc0683d44c5d51651b8742ea30f3a335c7bf4586",
+    "health_smoke.py": "fe77cb60a7f64bb2f396757f65cb89e80f6ecf96aa1ff0a3a523b7520a570207",
+    "source_launcher.py": "c285cac257486e50a01f1a6a852c8c3c9f1e7634609426d019cc2f111e3c771e",
+    "start.bat": "7377B1EA3F28977AAE8B1413D38D7B657738F3AA223B0209AFDB1B0D2FE49647",
+    "test_server_release_safety.py": "8ba9a828e2a88b3eebc62ac7f92dcd514ba9b1d9f1c4d9b15dff95ac33dbee55",
+    "test_health_smoke.py": "e47e54883813ce5130cd7bdf015263b1277516dc5b9f0c917467b9e4ddbe20c8",
+    "test_source_launcher_batch.py": "016164A040B34C7938AF488431825771E0737C38364529ACFE8C6BCCB893C6EE",
+    "templates/dashboard.html": "28F19882A644F0129E64C726B602E77CE0FE54C704A94073FA9A94C145801EF1",
+    "test_dashboard_logic.cjs": "8B160F85117DB1C997D84112DCC8DBA64AA3F59968E8C991A494CDB75BF83CB7",
+    "requirements.txt": "8EF27AD3983874311C92B91E8567F3330EAA11AA413276C70748736C6AAFF507",
+    "README.md": "362D269BF22193FA504E9A6F27FDBA45CA87CF7D794083C8271270172D648597",
+    ".gitignore": "92EADFB5D01C3B2080B33E90D4F6C2C14ACE94608F092FD4579044A6A1F143DA",
+    "packaging/verify_portable.py": "ED85510078A3FA03EA95242B5FD1BC32B9589AEFE9F5E1BF5E5ACB90DE99BE53",
+    "packaging/test_snapshot_integrity.py": "1E6738934966589C055CD44DC657BE29B2BE883EA79ACC84DD1E54783A5CAEA8"
+  },
+  "build": {
+    "started": false,
+    "new_bundle_verified": false,
+    "launch_result": "Rejected before process creation by host execution policy",
+    "reported_reason": "blocked by policy",
+    "retried_via_alternate_mechanism": false
+  },
+  "acceptance_limits": {
+    "windows_10_x64": {
+      "physically_tested": false,
+      "user_waived": true,
+      "blocking": false
+    },
+    "physical_usb": {
+      "verified": false,
+      "user_waived": false
+    },
+    "real_provider_accounts": {
+      "verified": false,
+      "user_waived": false
+    },
+    "real_phone_fixture": "Not applicable",
+    "browser_download_to_disk": "Not verified; source Blob bytes tested, browser download-event interface timed out"
+  },
+  "pending_cleanup": [],
+  "remaining_steps": [
+    "Resolve host execution restriction for authorized isolated Windows builds",
+    "Build and verify fresh frozen bundles against current source hashes",
+    "Refresh delivery artifact paths and hashes",
+    "Clean superseded artifacts without removing required evidence or user data",
+    "Commit/push reviewed sources and publish fresh portable assets after release acceptance"
+  ],
+  "live_env_or_credentials_read": false,
+  "global_model_or_provider_defaults_changed": false
+}

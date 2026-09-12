@@ -5,6 +5,8 @@
 **版本**: 2026.6.10.1739
 **作者**: QXW
 
+> 文中 `v2.1.0` / `v2.2.0` 为历史功能标签；运行时版本常量以代码 `_SERVER_VERSION = "2026.6.10.1739"` 为准。
+
 ---
 
 ## 重要提示
@@ -28,7 +30,7 @@
 - **OCS 兼容**: 完全兼容 OCS 的 AnswererWrapper 题库接口
 - **高性能缓存**: 线程安全的内存缓存（MD5 哈希键 + TTL 过期 + LRU 淘汰）
 - **安全可靠**: 支持 ACCESS_TOKEN 双重验证（Header `X-Access-Token` / URL `?token=`），仪表盘和健康检查会在配置令牌后隐藏敏感运行信息
-- **多种题型**: 支持单选(single)、多选(multiple)、判断(judgement)、填空(completion)
+- **多种题型**: 支持单选(single)、多选(multiple)、判断(judgement)、填空(completion)、简答(short-answer)
 - **错误处理**: API 超时、连接失败、HTTP 错误分级处理与友好提示
 - **数据统计**: `/dashboard` 仪表盘实时监控服务状态、ccswitch 配置详情和问答历史，ccswitch 敏感环境变量只显示 `<hidden>`
 - **Web UI**: Bootstrap 5 响应式界面，支持移动端，XSS 防护
@@ -44,7 +46,7 @@
 
 ## 系统要求
 
-- Python 3.7+
+- 源码运行需要 Python 3.10+（建议使用 3.12）；Windows 便携包不需要本机 Python。
 - [ccswitch](https://github.com/ccswitch/ccswitch)（推荐，自动管理 API 密钥和模型配置）
 - 或手动配置：DeepSeek / Anthropic 兼容 API 密钥
 
@@ -113,7 +115,7 @@ python app.py
 
 ```bash
 # 服务启动后执行一次完整性探针
-python health_smoke.py --host 127.0.0.1 --port 5000
+python health_smoke.py --host 127.0.0.1 --port 5000 --json --output health_smoke.json
 ```
 
 ### 5. 在 OCS 中配置使用
@@ -142,27 +144,29 @@ python health_smoke.py --host 127.0.0.1 --port 5000
 
 ```
 ocsjs-ai-answer-service/
-├── app.py                  # 主应用入口 (Flask Web 服务，8 路由)
-├── config.py               # 配置模块 (ccswitch 优先 + .env 回退，16 项配置 + 运行时重载)
-├── ccswitch.py             # ccswitch 配置读取模块 (5 函数 + 5 级模型回退 + 模型名净化)
-├── utils.py                # 工具函数 (线程安全缓存 / 答案格式化 / 答案提取)
-├── logger.py               # 日志模块 (RotatingFileHandler 轮转 + Windows UTF-8 修复)
-├── test_service.py         # 服务测试脚本 (7 项测试覆盖)
-├── health_smoke.py         # 健康检查冒烟脚本（独立执行，最小探活）
-├── requirements.txt        # Python 依赖清单 (6 包)
-├── Dockerfile              # Docker 镜像构建文件 (8 层)
-├── docker-compose.yml      # Docker Compose 编排文件 (含健康检查)
-├── .env.example            # 环境变量配置模板 (15 项)
-├── .env                    # 实际环境变量（gitignore 排除）
-├── .gitignore              # Git 忽略规则 (42 条)
-├── LICENSE                 # GPL v3 许可证
-├── api_docs.md             # API 文档 (Markdown)
+├── app.py                  # 主应用入口 (Flask Web 服务)
+├── config.py               # 配置模块 (默认回环监听 HOST=127.0.0.1, DEBUG=False)
+├── ccswitch.py             # ccswitch 配置读取模块
+├── utils.py                # 工具函数 (缓存 / 答案提取 / 题型归一)
+├── logger.py               # 日志模块 (轮转 + Windows UTF-8)
+├── provider_clients.py     # OpenAI chat/responses 协议适配器
+├── portable_entry.py       # Windows 便携入口
+├── portable_app.py         # 原生 Tk 配置/问答界面
+├── portable_controller.py  # 回环 Waitress 服务生命周期
+├── portable_selftest.py    # 合成自检
+├── portable_paths.py       # 便携路径解析
+├── portable_settings.py    # 偏好与可选加密配置
+├── healthcheck.py          # Docker/健康探针 (python healthcheck.py)
+├── health_smoke.py         # 健康检查冒烟脚本
+├── requirements.txt        # Python 依赖清单
+├── packaging/              # Windows 便携打包与完整性门禁
+├── Dockerfile              # Docker 镜像 (python:3.12-slim, HOST=0.0.0.0)
+├── docker-compose.yml      # Docker Compose
+├── .env.example            # 环境变量配置模板
+├── api_docs.md             # API 文档
 ├── ocs_config_example.json # OCS 配置示例
-├── static/
-│   └── style.css           # 全局样式 (17 区域，含滚动条美化 / 移动端适配)
-└── templates/
-    ├── index.html          # 首页 (Bootstrap 5 + Axios + XSS 防护)
-    └── dashboard.html      # 仪表盘 (Bootstrap 5 + DataTables + jQuery + ccswitch 详情)
+├── static/                 # 本地 vendor 资源与样式
+└── templates/              # index.html / dashboard.html
 ```
 
 ---
@@ -328,9 +332,9 @@ def reload_config() -> bool:
 
 | 属性 | 环境变量 | 类型 | 默认值 | 说明 |
 |------|---------|------|--------|------|
-| `HOST` | `HOST` | str | `"0.0.0.0"` | Flask 监听地址 |
+| `HOST` | `HOST` | str | `"127.0.0.1"` | Flask 监听地址（Docker/LAN 需显式 `0.0.0.0`） |
 | `PORT` | `PORT` | int | `5000` | 监听端口 |
-| `DEBUG` | `DEBUG` | bool | `True` | Flask 调试模式 |
+| `DEBUG` | `DEBUG` | bool | `False` | Flask 调试模式 |
 | `ANTHROPIC_API_KEY` | ccswitch 优先; 回退 `ANTHROPIC_API_KEY` | str | `""` | AI API 密钥 |
 | `ANTHROPIC_BASE_URL` | ccswitch 优先; 回退 `ANTHROPIC_BASE_URL` | str | `"https://api.deepseek.com/anthropic"` | API 地址 |
 | `ANTHROPIC_MODEL` | ccswitch 优先; 回退 `ANTHROPIC_MODEL` | str | `"deepseek-v4-pro"` | 模型名称（已净化） |
@@ -369,7 +373,7 @@ Flask Web 服务主文件，是整个系统的中枢。
    └─ 用 RotatingFileHandler 重新配置日志（控制台 UTF-8 + 文件轮转）
 
 5. 启动日志: 配置来源 + 模型 + Base URL + 净化信息（如适用）
-6. Flask(__name__) + CORS(app)
+6. Flask(__name__)（无 CORS 通配；OCS 使用 GM_xmlhttpRequest，自带 UI 同源）
 7. SimpleCache(Config.CACHE_EXPIRATION) 初始化缓存
 8. anthropic.Anthropic(api_key, base_url, timeout, max_retries) 初始化 AI 客户端
 9. build_ai_client() 函数定义（供运行时重载使用）
@@ -385,7 +389,7 @@ Flask Web 服务主文件，是整个系统的中枢。
 | `start_time` | `float` | `time.time()` | 服务启动时间戳 |
 | `SYSTEM_PROMPT` | `str` | 见代码 | AI 系统提示词，定义答题格式规范 |
 | `MAX_RECORDS` | `int` | `100` | 最大历史记录数 |
-| `_SERVER_VERSION` | `str` | `"2.2.0"` | 服务版本号常量 |
+| `_SERVER_VERSION` | `str` | `"2026.6.10.1739"` | 服务版本号常量 |
 | `build_ai_client()` | `() -> Anthropic` | — | **v2.1.0 新增**: 用当前配置重建客户端 |
 | `_call_ai()` | `(prompt, max_tokens=300) -> str\|None` | — | **v2.2.0 新增**: 调用 AI API，空文本自动重试+降温
 
@@ -550,7 +554,7 @@ if __name__ == '__main__':
 
 #### 4. `utils.py` — 工具函数模块
 
-`from __future__ import annotations` 确保 Python 3.7+ 兼容。
+`from __future__ import annotations` 用于延迟类型注解求值；项目及当前 SDK 的源码运行要求仍为 Python 3.10+。
 
 ##### `class SimpleCache` — 线程安全内存缓存
 
@@ -611,20 +615,13 @@ B. 北京
 构建 AI 提示词。拼接三段式结构：
 
 ```
-问题: {question}
-{题型提示行 — 从 _TYPE_HINTS 字典映射}
+【题型标签】{question}
 选项:\n{options}        (仅当 options 非空)
-请直接给出答案，不要解释。
+{按题型生成的严格输出指令}
 ```
 
-**`_TYPE_HINTS` 映射**:
-
-| type | 提示文本 |
-|------|---------|
-| `single` | `这是一道单选题。` |
-| `multiple` | `这是一道多选题，答案请用#号分隔选项。` |
-| `judgement` | `这是一道判断题，需要回答：正确/对/true/√ 或者 错误/错/false/×。` |
-| `completion` | `这是一道填空题。` |
+题型标签与指令由 `parse_question_and_options` / `_build_instructions` 生成，覆盖
+`single` / `multiple` / `judgement` / `completion` / `short-answer`。
 
 ##### `extract_answer(ai_response, question_type, options="")` → `str`
 
@@ -745,17 +742,52 @@ python health_smoke.py --check-protected
 ```
 
 参数摘要：
-- `--host` 服务监听主机（默认 `0.0.0.0`）
+- `--host` 服务监听主机（默认 `127.0.0.1`；探活请指向实际服务地址）
 - `--port` 服务端口（默认 `5000`）
 - `--token` 自定义探测 token（默认读取 `ACCESS_TOKEN`）
 - `--check-protected` 启用时要求 ACCESS_TOKEN 存在时匿名请求返回 `details=protected`
 - `--timeout` HTTP 请求超时时间（单位秒，默认 `3`）
 - `--require-ready` 要求返回中的 `runtime_ready` 为 `true`
 - `--dump` 输出完整 JSON 报告到标准输出
+- `--json` 等价于 `--dump`，用于 CI/脚本机器读取（建议 CI 固定开启）
+- `--output` 写入 JSON 报告到文件（缺省不落盘）
+- `--print-summary` 打印一行结果摘要，适合批处理脚本判断
+- `HSMOKEE_OUTPUT` 环境变量可设置默认落盘路径
 
 可用退出码：
 - `0`：所有检测通过  
 - `1`：任意检测失败（连接失败、返回结构不符）
+
+`--json` 输出示例摘要（简化）：
+
+```json
+{
+  "schema_version": "health-smoke/v1",
+  "ok": true,
+  "elapsed_ms": 124,
+  "url": "http://127.0.0.1:5000/api/health",
+  "probe_count": 2,
+  "checks_count": 2,
+  "probe_order": ["anonymous", "token"],
+  "output": "D:\\path\\to\\health_smoke.json",
+  "checks": {
+    "anonymous": {
+      "ok": true,
+      "payload": {...},
+      "duration_ms": 44.18
+    },
+    "token": {
+      "ok": true,
+      "payload": {...},
+      "duration_ms": 52.07
+    }
+  },
+  "failure_reasons": [],
+  "exit_code": 0
+}
+```
+
+建议在 CI 中直接消费 `ok / probe_count / elapsed_ms / failure_reasons / exit_code`。
 
 #### 8. `templates/index.html` — 问答测试首页
 
@@ -913,9 +945,9 @@ function escapeHtml(text) {
 #### 10. `.env.example` — 环境变量模板
 
 ```ini
-HOST=0.0.0.0              # Flask 监听地址
+HOST=127.0.0.1             # Flask 监听地址（Docker/LAN 设 0.0.0.0）
 PORT=5000                  # 监听端口
-DEBUG=True                 # 调试模式
+DEBUG=False                # 调试模式
 
 # 回退 API 配置（ccswitch 可用时忽略）
 ANTHROPIC_API_KEY=your-api-key-here
@@ -949,28 +981,28 @@ LOG_LEVEL=INFO
 | 包 | 最低版本 | 用途 |
 |----|---------|------|
 | `flask` | ≥2.0.1 | Web 框架 |
-| `flask-cors` | ≥3.0.10 | 跨域支持 |
+| `itsdangerous` | ≥2.0 | 浏览器会话签名 |
 | `python-dotenv` | ≥0.19.1 | .env 加载 |
-| `anthropic` | ≥0.39.0 | Anthropic 兼容 API 客户端 (含超时/重试机制) |
+| `anthropic` | ≥1.0，<2 | Anthropic 兼容 API 客户端，使用公开的请求头覆盖及 `omit` 接口隔离便携环境鉴权 |
 | `gunicorn` | ≥20.1.0 | 生产 WSGI 服务器 |
 | `markdown` | ≥3.3.0 | Markdown→HTML (可选，/docs 路由美化) |
 
 #### 12. `Dockerfile` — Docker 镜像
 
-基于 `python:3.9-slim`，7 步构建：
+基于 `python:3.12-slim`，显式复制应用模块与本地静态资源：
 
 ```
-1. FROM python:3.9-slim
-2. WORKDIR /app
-3. COPY requirements.txt .
-4. RUN apt-get 安装 curl + pip install 依赖
-5. COPY . .
-6. RUN mkdir -p logs
-7. EXPOSE 5000
-8. CMD: gunicorn --bind 0.0.0.0:5000 --limit-request-line 16380 app:app
+1. FROM python:3.12-slim
+2. ENV HOST=0.0.0.0 DEBUG=false
+3. WORKDIR /app
+4. COPY requirements.txt . && pip install
+5. COPY 应用模块 + templates + static
+6. EXPOSE 5000
+7. HEALTHCHECK: python healthcheck.py
+8. CMD: gunicorn --config gunicorn.conf.py app:app
 ```
 
-`--limit-request-line 16380` 允许长题干 URL 参数通过。
+`gunicorn.conf.py` 使用 `workers=1` + `gthread`（保留缓存/仪表盘单进程状态），并设置 `limit_request_line=16380`。
 
 #### 13. `docker-compose.yml` — Docker Compose
 
@@ -978,16 +1010,19 @@ LOG_LEVEL=INFO
 services:
   ai-answer-service:
     build: .
-    ports: "5000:5000"
-    volumes: ./logs:/app/logs         # 日志持久化
-    env_file: .env                    # 环境变量注入
+    ports: "${PORT:-5000}:${PORT:-5000}"
+    volumes: ./logs:/app/logs
+    env_file: .env
+    environment:
+      PORT: "${PORT:-5000}"
+      HOST: "0.0.0.0"
+      DEBUG: "false"
     extra_hosts:
-      - "host.docker.internal:host-gateway"  # 容器→宿主机 (访问 ccswitch)
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
-    healthcheck:
-      test: curl -f http://localhost:5000/api/health
-      interval: 30s / timeout: 10s / retries: 3
 ```
+
+健康检查由镜像内的 `python healthcheck.py` 执行（HTTP 200 + `runtime_ready` 或 `status=degraded`/`details=protected` 视为存活）。
 
 > 如果 ccswitch 监听在 `127.0.0.1:15721`，settings.json 中 `ANTHROPIC_BASE_URL` 需配置为 `http://host.docker.internal:15721/...`。
 
@@ -1223,15 +1258,15 @@ def _sanitize_model_name(model: str) -> str:
 ## 生产部署
 
 ```bash
-# Gunicorn
-gunicorn -w 4 -b 0.0.0.0:5000 app:app
+# Gunicorn（推荐用仓库自带配置，workers=1 + gthread）
+gunicorn --config gunicorn.conf.py app:app
 
 # Docker
 docker build -t ai-answer-service .
 docker run -p 5000:5000 --env-file .env ai-answer-service
 
 # Docker Compose
-docker-compose up -d
+docker compose up -d
 ```
 
 ---
@@ -1254,7 +1289,7 @@ docker-compose up -d
   - 判断：正确/对/true/√/yes→「正确」，错误/错/false/×/no→「错误」
   - 多选：逗号/空格分隔的答案自动转 # 格式；`A. 北京, C. 广州` 或分行选项前缀会稳定清洗为 `北京#广州`
 - **新增**: 详细日志（API 提示词、答案内容、是否有选项）
-- **修复**: `str | None` 类型注解改为 Python 3.7+ 兼容写法
+- **修复**: 早期将 `str | None` 类型注解改为兼容写法；当前源码运行要求已更新为 Python 3.10+
 - **修复**: SYSTEM_PROMPT 与 _build_instructions 指令一致性对齐
 - **Q-CR 三轮审查**: R-07 类型注解/R-10 单选字母前缀/R-13 指令矛盾 全部修复
 

@@ -33,7 +33,9 @@ logs/
 
 # Environment & secrets
 .env
+.env.*
 !.env.example
+/data/
 
 # Docker
 .docker/
@@ -42,3 +44,4 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+/.health-smoke-test-*/

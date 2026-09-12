@@ -183,6 +183,52 @@ class ConfigAndSecurityTests(unittest.TestCase):
         self.assertEqual(result, "final answer")
         self.assertEqual(captured[0]["max_tokens"], 123)
 
+    def test_safer_bind_defaults_are_documented_in_code(self):
+        # Live Config.HOST/DEBUG may be overridden by host .env; assert the
+        # production default path in source and the operator-facing templates.
+        from pathlib import Path
+        import config as config_module
+
+        source = Path(config_module.__file__).read_text(encoding="utf-8")
+        self.assertIn('_env_str("HOST", "127.0.0.1")', source)
+        self.assertIn('_env_bool("DEBUG", False)', source)
+        example = Path(config_module.__file__).with_name(".env.example").read_text(encoding="utf-8")
+        self.assertIn("HOST=127.0.0.1", example)
+        self.assertIn("DEBUG=False", example)
+
+    def test_short_answer_is_normalized_and_instructed(self):
+        from utils import normalize_question_type, parse_question_and_options
+
+        self.assertEqual(normalize_question_type("short-answer"), "short-answer")
+        self.assertEqual(normalize_question_type("简答题"), "short-answer")
+        prompt = parse_question_and_options("解释光合作用", "", "short-answer")
+        self.assertIn("【简答题】", prompt)
+        self.assertIn("简答题", prompt)
+
+    def test_api_does_not_emit_cors_wildcard_header(self):
+        client = app_module.app.test_client()
+        response = client.get("/api/health")
+        self.assertNotIn("Access-Control-Allow-Origin", response.headers)
+
+    def test_healthcheck_treats_degraded_as_alive(self):
+        import healthcheck
+        from unittest.mock import patch
+        import json as json_module
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self):
+                return json_module.dumps({
+                    "status": "degraded", "runtime_ready": False, "message": "not ready"
+                }).encode("utf-8")
+
+        with patch.object(healthcheck.urllib.request, "build_opener") as build:
+            build.return_value.open.return_value = FakeResponse()
+            self.assertEqual(healthcheck.main(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

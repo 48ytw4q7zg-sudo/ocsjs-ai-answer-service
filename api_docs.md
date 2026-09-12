@@ -25,7 +25,7 @@ AI题库服务是一个基于 Anthropic 兼容协议的智能题库服务，专�
 | 参数名   | 类型   | 必填 | 说明                                                     |
 |---------|--------|------|----------------------------------------------------------|
 | title / question / q / content / text | string | 是   | 题目内容（最大 2000 字符）；`title` 为 OCS 原字段，二者同时存在时优先使用靠前的非空字段 |
-| type / questionType / question_type / qtype / category / kind | string/number | 否   | 题目类型：`single`/`multiple`/`judgement`/`completion`；也兼容 `1` 单选、`2` 多选、`3` 判断、`4` 填空 |
+| type / questionType / question_type / qtype / category / kind | string/number | 否   | 题目类型：`single`/`multiple`/`judgement`/`completion`/`short-answer`；也兼容 `1` 单选、`2` 多选、`3` 判断、`4` 填空、`5` 简答 |
 | options / choices / answers / answerOptions / option / opts | string/array/object | 否   | 选项内容，通常是A、B、C、D选项的文本；JSON 请求体必须是对象，支持 `application/json` 和 `application/*+json`；选项可传字符串、字符串数组、对象数组（如 `{label,text}`）或键值对象（如 `{A:"上海"}`）；服务会统一换行、去除空行和首尾空格 |
 
 **成功响应** (HTTP 200):

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import app as app_module
 from logger import setup_logger
-from utils import SimpleCache, extract_answer, normalize_options
+from utils import SimpleCache, extract_answer, normalize_options, normalize_question_type
 
 
 class AppSafetyTests(unittest.TestCase):
@@ -102,6 +102,10 @@ class AppSafetyTests(unittest.TestCase):
         self.assertEqual(extract_answer("Apple#Banana", "multiple"), "Apple#Banana")
         self.assertEqual(extract_answer("A#B", "multiple"), "A#B")
         self.assertEqual(extract_answer("A. Apple#B. Banana", "multiple"), "Apple#Banana")
+
+    def test_short_answer_type_is_supported_end_to_end(self):
+        self.assertEqual(normalize_question_type("short-answer"), "short-answer")
+        self.assertEqual(extract_answer("答案：光合作用产生氧气。", "short-answer"), "光合作用产生氧气")
 
     def test_normalize_options_removes_blank_lines_and_unifies_newlines(self):
         self.assertEqual(

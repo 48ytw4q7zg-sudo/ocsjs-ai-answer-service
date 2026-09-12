@@ -188,6 +188,15 @@ def normalize_question_type(question_type: Any) -> str:
         "blank": "completion",
         "填空": "completion",
         "填空题": "completion",
+        "5": "short-answer",
+        "short-answer": "short-answer",
+        "short_answer": "short-answer",
+        "shortanswer": "short-answer",
+        "short": "short-answer",
+        "简答": "short-answer",
+        "简答题": "short-answer",
+        "问答": "short-answer",
+        "问答题": "short-answer",
     }
     return aliases.get(normalized, normalized)
 
@@ -207,6 +216,7 @@ def parse_question_and_options(question: str, options: str,
     type_label = {
         "single": "【单选题】", "multiple": "【多选题】",
         "judgement": "【判断题】", "completion": "【填空题】",
+        "short-answer": "【简答题】",
     }.get(question_type, "【题目】")
 
     parts.append(f"{type_label}{question}")
@@ -256,6 +266,8 @@ def _build_instructions(question_type: str, has_options: bool) -> str:
         )
     elif question_type == "completion":
         return "只输出填空处的答案文本，不要输出题目。"
+    elif question_type == "short-answer":
+        return "请用简洁的完整句回答简答题。只输出答案正文，不要复述题目，也不要附加分析过程。"
     else:
         return "只输出最终答案。"
 
@@ -264,7 +276,7 @@ _OPTION_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 _OPTION_SET = frozenset(_OPTION_LETTERS)
 
 _ANSWER_PREFIX_RE = re.compile(
-    r'^(答案[是为：:]\s*|答[：:]\s*|正确答[案案][：:]\s*|正确[选项是]*[：:]\s*'
+    r'^(答案[是为：:]\s*|答[：:]\s*|正确答案[：:]\s*|正确[选项是]*[：:]\s*'
     r'|Answer[：:]\s*|The\s+answer\s+is\s*)+',
     re.IGNORECASE
 )

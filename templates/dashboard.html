@@ -519,7 +519,6 @@
         if (confirm('确定要清除所有缓存吗？')) {
             requestJson('/api/cache/clear', {
                 method: 'POST',
-                headers: authHeaders(),
             })
             .then(data => {
                 const opSuccess = data && Object.prototype.hasOwnProperty.call(data, 'success') ? Boolean(data.success) : true;
@@ -542,7 +541,6 @@
         if (confirm('确定要重新加载 ccswitch 配置吗？')) {
             requestJson('/api/config/reload', {
                 method: 'POST',
-                headers: authHeaders(),
             })
             .then(data => {
                 const opSuccess = data && Object.prototype.hasOwnProperty.call(data, 'success') ? Boolean(data.success) : true;

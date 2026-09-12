@@ -36,6 +36,8 @@ REQUIRED_CHECKS = {
     'encrypted_profile_roundtrip', 'no_plaintext_credentials',
     'profile_preferences_roundtrip', 'wrong_password_rejected',
     'native_tk_interface', 'tk_runtime', 'http_thread_stopped',
+    'browser_session_created', 'browser_session_revoked_after_token_change',
+    'ocs_integration_schema', 'failed_configuration_is_transactional',
 }
 
 # This packaging hook only observes explicitly requested self-tests. It does not
@@ -177,7 +179,7 @@ def dependencies():
                         'record_sha256': hashlib.sha256((distribution.read_text('RECORD') or '').encode('utf-8')).hexdigest()}
     for name, expected in TOOLS.items():
         require(name in result and result[name]['version'] == expected, 'Build dependency pin mismatch: ' + name + '==' + expected)
-    for name in ('flask', 'flask-cors', 'anthropic', 'cryptography', 'httpx', 'certifi', 'waitress', 'markdown', 'python-dotenv'):
+    for name in ('flask', 'anthropic', 'cryptography', 'httpx', 'certifi', 'waitress', 'markdown', 'python-dotenv', 'itsdangerous'):
         require(name in result, 'Runtime dependency missing from the existing venv: ' + name)
     return result
 
@@ -404,6 +406,43 @@ def pe_info(path):
     return {'machine': 'AMD64', 'subsystem': struct.unpack_from('<H', header, 92)[0]}
 
 
+def release_status():
+    """Physical-test status for generated evidence, aligned with the 2026-09-08 waiver."""
+    return {
+        'windows_10_x64': {
+            'physically_tested': False,
+            'user_waived': True,
+            'blocking': False,
+            'note': 'Not physically tested; user-waived 2026-09-08; non-blocking. Target remains Windows 10/11 x64.',
+        },
+        'physical_usb': {
+            'physically_tested': False,
+            'user_waived': False,
+            'blocking': False,
+            'note': 'Explicitly unverified. Physical USB filesystem and managed-device policies were not tested and were not waived.',
+        },
+        'real_provider_accounts': {
+            'physically_tested': False,
+            'user_waived': False,
+            'blocking': False,
+            'note': 'Explicitly unverified; not waived. Synthetic local protocol checks are not real account, credential, model-availability, or billing certification.',
+        },
+    }
+
+
+def release_evidence_status():
+    """Fields injected into bundle-verification.json and related build evidence."""
+    return {
+        'unverified': [
+            'Windows 10 x64 (not physically tested; user-waived 2026-09-08; non-blocking)',
+            'Other Windows 11 builds',
+            'A clean OS without installed runtimes',
+            'A physical USB filesystem',
+            'Real provider credentials/accounts/billing'],
+        'release_status': release_status(),
+    }
+
+
 def inventory(bundle, resource_records):
     require({p.name for p in bundle.iterdir()} == {'EduBrain.exe', 'EduBrain-console.exe', '_internal', 'README.txt', 'LICENSE.txt', 'data'}, 'Unexpected bundle root content')
     require(not any((bundle / 'data').iterdir()), 'Release data folder must be empty')
@@ -486,8 +525,7 @@ def verify(job):
               'source_hashes_sha256': digest(evidence / 'source-hashes.json'),
               'dependency_state_sha256': digest(evidence / 'dependency-state.json'),
               'analysis_inputs_sha256': digest(evidence / 'analysis-inputs.json'),
-              'unverified': ['Windows 10', 'Other Windows 11 builds', 'A clean OS without installed runtimes',
-                             'A physical USB filesystem', 'Real provider credentials/accounts/billing']}
+              **release_evidence_status()}
     save(evidence / 'bundle-verification.json', result)
     sums = [r['sha256'] + '  EduBrain/' + r['path'] for r in before['files']]
     sums.append(result['zip']['sha256'] + '  ' + archive_path.name)

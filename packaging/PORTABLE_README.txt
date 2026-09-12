@@ -39,4 +39,4 @@ EduBrain-console.exe 是保留控制台输出的诊断入口；正常使用请�
 - 网页组件声明见 _internal\THIRD_PARTY_NOTICES.md；原始许可证随组件保留。
 - 项目许可证见 LICENSE.txt；Python 许可证见 _internal\licenses\python。
 - 本发行包未做代码签名。构建者保留完整哈希及本机验收记录。
-- 兼容性只以实际验收系统为证；其他 Windows 构建和真实 U 盘仍需单独验证。
+- 兼容性只以实际验收系统为证；Windows 10 x64 实机测试已由用户豁免（非阻塞），其他 Windows 构建、真实 U 盘及真实模型账号仍需单独验证。

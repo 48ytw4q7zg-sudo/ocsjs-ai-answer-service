@@ -129,7 +129,7 @@ def _env_log_level(name: str, default: str = "INFO") -> str:
     logger.warning(
         "配置项 %s 的值 %r 无效，已回退到默认日志级别 %s",
         name,
-        os.getenv(name),
+        _environment_value(name),
         default,
     )
     return default
@@ -199,9 +199,11 @@ class Config:
     # ---- 服务配置 ----
     IS_PORTABLE = PORTABLE_MODE
     LOG_DIR = str(data_root() / 'logs') if PORTABLE_MODE else 'logs'
-    HOST = _env_str("HOST", "127.0.0.1" if PORTABLE_MODE else "0.0.0.0")
+    # Loopback by default; Docker/LAN hosts must set HOST=0.0.0.0 explicitly.
+    HOST = _env_str("HOST", "127.0.0.1")
     PORT = _env_int("PORT", 5000, min_value=1, max_value=65535)
-    DEBUG = _env_bool("DEBUG", False if PORTABLE_MODE else True)
+    # Debug reloader/debugger stay off unless the operator opts in.
+    DEBUG = _env_bool("DEBUG", False)
 
     # ---- AI API 配置 ----
     if _ccswitch and _ccswitch.get("api_key"):

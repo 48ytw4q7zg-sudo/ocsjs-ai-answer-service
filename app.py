@@ -7,8 +7,6 @@ EduBrain AI - 智能题库系统 v2026.6.10.1739
 版本：2026.6.10.1739
 """
 from flask import Flask, request, jsonify, render_template
-from flask_cors import CORS
-import os
 import time
 import logging
 import secrets
@@ -23,6 +21,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 import threading
+from contextlib import contextmanager
 import sys
 from html import escape
 
@@ -39,6 +38,7 @@ from utils import (
     parse_question_and_options,
 )
 from logger import setup_logger
+from provider_clients import IncompleteResponseError, portable_anthropic_headers, require_final_state
 
 level = getattr(logging, Config.LOG_LEVEL, logging.INFO)
 logger = setup_logger('ai_answer_service', log_dir=Config.LOG_DIR, level=level)
@@ -49,7 +49,7 @@ if Config.CCSWITCH_RAW_MODEL and Config.CCSWITCH_RAW_MODEL != Config.ANTHROPIC_M
     logger.info(f"模型名已净化: '{Config.CCSWITCH_RAW_MODEL}' -> '{Config.ANTHROPIC_MODEL}'")
 
 app = Flask(__name__)
-CORS(app)
+# No CORS wildcard: OCS uses GM_xmlhttpRequest (CORS-exempt); the bundled UI is same-origin.
 
 _BROWSER_SESSION_SECONDS = 3600
 _browser_session_secret = secrets.token_bytes(32)
@@ -60,6 +60,8 @@ _records_lock = threading.Lock()
 cache = None
 client = None
 _runtime_init_error = None
+_client_generations = {}
+_cache_epoch = 0
 
 MAX_RECORDS = 100
 qa_records = deque(maxlen=MAX_RECORDS)
@@ -127,21 +129,82 @@ def _extract_access_token(req):
     return None
 
 
-def _runtime_initialize():
-    """根据当前 Config 重建 AI 客户端和缓存实例。"""
-    global _runtime_init_error
-    global client, cache
+class _ClientGeneration:
+    def __init__(self, active_client):
+        self.client = active_client
+        self.active_calls = 0
+        self.retired = False
+
+
+def _close_ai_client(active_client):
+    if active_client is None or not hasattr(active_client, 'close'):
+        return
+    try:
+        active_client.close()
+    except Exception as exc:
+        logger.warning("AI client close failed: %s", type(exc).__name__)
+
+
+@contextmanager
+def _client_lease():
+    # Register the call before releasing the lock, including attribute lookup
+    # and request construction. Network I/O itself remains concurrent.
     with _runtime_lock:
+        active_client = client
+        if active_client is None:
+            raise RuntimeError("AI runtime is unavailable")
+        key = id(active_client)
+        generation = _client_generations.get(key)
+        if generation is None:
+            generation = _ClientGeneration(active_client)
+            _client_generations[key] = generation
+        generation.active_calls += 1
+        active_model = Config.ANTHROPIC_MODEL
+    try:
+        yield active_client, active_model
+    finally:
+        close_client = None
+        with _runtime_lock:
+            generation.active_calls -= 1
+            if generation.retired and generation.active_calls == 0:
+                _client_generations.pop(key, None)
+                close_client = generation.client
+        _close_ai_client(close_client)
+
+
+def _retire_client(active_client):
+    # The caller holds the runtime lock while publishing the replacement.
+    generation = _client_generations.get(id(active_client))
+    if generation is None:
+        _close_ai_client(active_client)
+        return
+    generation.retired = True
+    if generation.active_calls == 0:
+        _client_generations.pop(id(active_client), None)
+        _close_ai_client(active_client)
+
+
+def _runtime_initialize():
+    """Publish a complete runtime, then retire the previous client."""
+    global _runtime_init_error, client, cache, _cache_epoch
+    with _runtime_lock:
+        candidate_client = None
         try:
             candidate_client = build_ai_client()
             candidate_cache = SimpleCache(Config.CACHE_EXPIRATION) if Config.ENABLE_CACHE else None
         except Exception as exc:
+            if candidate_client is not client:
+                _close_ai_client(candidate_client)
             if client is None:
                 _runtime_init_error = type(exc).__name__
             logger.error("运行时重建失败: %s", type(exc).__name__)
             raise
+        previous_client = client
         client, cache = candidate_client, candidate_cache
+        _cache_epoch += 1
         _runtime_init_error = None
+        if previous_client is not None and previous_client is not client:
+            _retire_client(previous_client)
 
 
 def _initialize_runtime_if_needed() -> bool:
@@ -319,13 +382,21 @@ def build_ai_client():
         import certifi
         extra['http_client'] = anthropic.DefaultHttpxClient(
             verify=ssl.create_default_context(cafile=certifi.where()), trust_env=False)
-    return anthropic.Anthropic(
-        api_key=Config.ANTHROPIC_API_KEY,
-        base_url=Config.ANTHROPIC_BASE_URL,
-        timeout=Config.API_TIMEOUT,
-        max_retries=Config.API_MAX_RETRIES,
-        **extra,
-    )
+        # Explicit auth and public header omissions are per-client settings;
+        # the host environment is never temporarily rewritten.
+        extra['auth_token'] = ''
+        extra['default_headers'] = portable_anthropic_headers(Config.ANTHROPIC_API_KEY)
+    try:
+        return anthropic.Anthropic(
+            api_key=Config.ANTHROPIC_API_KEY,
+            base_url=Config.ANTHROPIC_BASE_URL,
+            timeout=Config.API_TIMEOUT,
+            max_retries=Config.API_MAX_RETRIES,
+            **extra,
+        )
+    except Exception:
+        _close_ai_client(extra.get('http_client'))
+        raise
 
 
 def _extract_text_from_response(response):
@@ -334,10 +405,16 @@ def _extract_text_from_response(response):
     遍历所有 content block，返回第一个 TextBlock 的文本。
     兼容 DeepSeek Anthropic 层可能返回非标准 block 结构的情况。
     """
-    if not response.content:
+    require_final_state(getattr(response, 'stop_reason', None), ('end_turn', 'stop_sequence'))
+    require_final_state(getattr(response, 'status', None), ('completed',))
+    content = response.content
+    if not content:
         logger.warning("AI 响应 content 为空列表")
         return None
-    for i, block in enumerate(response.content):
+    # A text block before a tool request is not a completed text-only answer.
+    if any(getattr(block, 'type', None) == 'tool_use' for block in content):
+        raise IncompleteResponseError()
+    for i, block in enumerate(content):
         block_type = getattr(block, 'type', 'unknown')
         if hasattr(block, 'text') and block.text and block.text.strip():
             if i > 0:
@@ -349,50 +426,45 @@ def _extract_text_from_response(response):
     return None
 
 
+def _safe_http_status(exc):
+    status = getattr(exc, 'status_code', None)
+    return status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else None
+
+
 def _call_ai(prompt: str, max_tokens=None):
-    """调用 AI API，2 次尝试：正常调用 + 降温简化重试。"""
+    """Call the current client with a lease covering the complete operation."""
     if not _initialize_runtime_if_needed():
         raise RuntimeError("AI 运行时未就绪")
-
     with _runtime_lock:
-        active_client = client
-        active_model = Config.ANTHROPIC_MODEL
         token_limit = Config.MAX_TOKENS if max_tokens is None else max_tokens
+        base_temperature = Config.TEMPERATURE
     for attempt in range(2):
         try:
-            _current_prompt = prompt
-            _current_temp = Config.TEMPERATURE
-            if attempt > 0:
-                _current_temp = 0.3
-                # 第 2 次重试用更简洁的指令，减少 AI 困惑
-                _current_prompt = _build_simple_prompt(prompt)
-
-            create_message = active_client.messages.create
-            parameters = inspect.signature(create_message).parameters
-            message_arguments = {
-                'model': active_model, 'max_tokens': token_limit,
-                'system': SYSTEM_PROMPT,
-                'messages': [{"role": "user", "content": _current_prompt}],
-            }
-            # New Anthropic SDKs removed temperature. Inspect before sending,
-            # rather than retrying an already-sent request after a TypeError.
-            if 'temperature' in parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
-                message_arguments['temperature'] = _current_temp
-            response = create_message(**message_arguments)
-
-            text = _extract_text_from_response(response)
-            if text:
-                return text
-
-        except (anthropic.APIStatusError, anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
-            logger.warning(f"API 调用失败 (attempt {attempt + 1}): {type(e).__name__}: {e}")
+            current_prompt = _build_simple_prompt(prompt) if attempt else prompt
+            current_temperature = 0.3 if attempt else base_temperature
+            with _client_lease() as (active_client, active_model):
+                create_message = active_client.messages.create
+                parameters = inspect.signature(create_message).parameters
+                message_arguments = {
+                    'model': active_model, 'max_tokens': token_limit,
+                    'system': SYSTEM_PROMPT,
+                    'messages': [{"role": "user", "content": current_prompt}],
+                }
+                # SDKs that removed temperature must not receive it.
+                if 'temperature' in parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+                    message_arguments['temperature'] = current_temperature
+                response = create_message(**message_arguments)
+                text = _extract_text_from_response(response)
+                if text:
+                    return text
+        except (anthropic.APIStatusError, anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
+            logger.warning("API call failed (attempt=%s, type=%s, status=%s)",
+                           attempt + 1, type(exc).__name__, _safe_http_status(exc))
             if attempt == 1:
                 raise
-
         if attempt == 0:
             logger.warning("第 1 次调用无有效文本，1 秒后重试...")
             time.sleep(1)
-
     return None
 
 
@@ -468,6 +540,7 @@ def search():
 
         with _runtime_lock:
             request_cache = cache
+            request_cache_epoch = _cache_epoch
         if request_cache is not None:
             cached_answer = request_cache.get(question, question_type, options)
             if cached_answer:
@@ -486,8 +559,9 @@ def search():
         if not processed_answer:
             return _error_response('AI 未返回有效答案，请重试', 503)
 
-        if request_cache is not None:
-            request_cache.set(question, processed_answer, question_type, options)
+        with _runtime_lock:
+            if request_cache is cache and request_cache is not None and request_cache_epoch == _cache_epoch:
+                request_cache.set(question, processed_answer, question_type, options)
 
         current_time = datetime.now(timezone.utc)
         with _records_lock:
@@ -505,9 +579,16 @@ def search():
 
         return jsonify(format_answer_for_ocs(question, processed_answer))
 
-    except anthropic.APIStatusError as e:
-        logger.error(f"API 错误 (status={e.status_code}): {e.message}")
-        return _error_response(f'AI服务暂时不可用 (HTTP {e.status_code})', 503)
+    except IncompleteResponseError:
+        logger.warning("Provider response was incomplete")
+        return jsonify({'code': 0, 'msg': 'AI回答未完成，请重试或调整输出上限',
+                        'error_code': 'incomplete_response'}), 503
+
+    except anthropic.APIStatusError as exc:
+        status = _safe_http_status(exc)
+        logger.error("API request failed (type=%s, status=%s)", type(exc).__name__, status)
+        message = f'AI服务暂时不可用 (HTTP {status})' if status is not None else 'AI服务暂时不可用'
+        return _error_response(message, 503)
 
     except anthropic.APITimeoutError:
         logger.error("API 请求超时")
@@ -518,11 +599,11 @@ def search():
         return _error_response('无法连接到AI服务', 502)
 
     except RuntimeError as e:
-        logger.error("AI 运行时尚未就绪: %s", e)
+        logger.error("AI 运行时尚未就绪: %s", type(e).__name__)
         return _error_response('AI 运行时未就绪，请稍后重试', 503)
 
     except Exception as e:
-        logger.error(f"处理问题时发生错误: {str(e)}", exc_info=True)
+        logger.error("处理问题时发生错误: %s", type(e).__name__)
         return jsonify({'code': 0, 'msg': '服务内部错误'}), 500
 
 
@@ -621,11 +702,15 @@ def config_reload():
 
 @app.route('/api/cache/clear', methods=['POST'])
 def clear_cache():
+    global _cache_epoch
     if not verify_access_token(request):
         return jsonify({'success': False, 'message': '无效的访问令牌'}), 403
-    if cache is None:
-        return jsonify({'success': False, 'message': '缓存未启用'}), 409
-    count = cache.clear()
+    with _runtime_lock:
+        active_cache = cache
+        if active_cache is None:
+            return jsonify({'success': False, 'message': '缓存未启用'}), 409
+        count = active_cache.clear()
+        _cache_epoch += 1
     return jsonify({'success': True, 'message': f'缓存已清除 ({count}条)', 'count': count})
 
 
@@ -694,11 +779,12 @@ def docs():
     try:
         content = doc_path.read_text(encoding='utf-8')
     except (OSError, UnicodeDecodeError) as exc:
-        logger.error("加载 API 文档失败: %s", exc)
+        logger.error("加载 API 文档失败: %s", type(exc).__name__)
         return "API文档文件不存在或不可访问", 500
 
     try:
         import markdown
+        # Local api_docs.md is trusted content; keep the no-markdown fallback escaped.
         html_content = markdown.markdown(content, extensions=['tables'])
         return f"""<html><head><title>AI题库服务 - API文档 v{_SERVER_VERSION}</title>
 <style>body{{font-family:Arial,sans-serif;margin:40px;line-height:1.6}}h1,h2,h3{{color:#2c3e50}}.container{{max-width:800px;margin:0 auto}}code{{background:#e0e0e0;padding:2px 4px;border-radius:3px}}pre{{background:#f4f4f4;padding:10px;border-radius:4px;overflow-x:auto}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ddd;padding:8px}}th{{background-color:#f4f4f4}}</style></head>
@@ -710,6 +796,13 @@ def docs():
 
 
 _initialize_runtime_if_needed()
+
+_LOOPBACK_HOSTS = {'127.0.0.1', 'localhost', '::1', '[::1]'}
+if Config.HOST.strip('[]') not in _LOOPBACK_HOSTS and not Config.ACCESS_TOKEN:
+    logger.warning(
+        'HOST=%s 不是回环地址且未设置 ACCESS_TOKEN；请仅在可信网络使用，或设置 ACCESS_TOKEN',
+        Config.HOST,
+    )
 
 
 if __name__ == '__main__':

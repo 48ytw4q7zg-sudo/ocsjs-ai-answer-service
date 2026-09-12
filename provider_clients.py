@@ -1,11 +1,44 @@
 """Text-only OpenAI protocol adapters with the service's Anthropic-shaped interface."""
 import re
+import os
 import time
 from types import SimpleNamespace
 
 import anthropic
 import certifi
 import httpx
+
+
+class IncompleteResponseError(RuntimeError):
+    def __init__(self):
+        super().__init__("Provider response was incomplete")
+
+
+def require_final_state(state, allowed):
+    """Missing optional markers are compatible; explicit states fail closed."""
+    if state is not None and (not isinstance(state, str) or state not in allowed):
+        raise IncompleteResponseError()
+
+
+def portable_anthropic_headers(api_key):
+    """Replace SDK environment headers using its public omission mechanism."""
+    required = {
+        'x-api-key': api_key,
+        'authorization': anthropic.omit,
+        'proxy-authorization': anthropic.omit,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+        'accept': 'application/json',
+    }
+    headers = {}
+    # Replace each original spelling, including duplicate case variants, so
+    # constructor dictionary ordering cannot restore an ambient credential.
+    for line in os.environ.get('ANTHROPIC_CUSTOM_HEADERS', '').split('\n'):
+        if ':' in line:
+            name = line.split(':', 1)[0].strip()
+            headers[name] = required.get(name.lower(), anthropic.omit)
+    headers.update(required)
+    return headers
 
 
 class OpenAICompatibleClient:
@@ -70,15 +103,19 @@ class OpenAICompatibleClient:
             except ValueError as exc:
                 raise anthropic.APIConnectionError(message='Provider returned an invalid response', request=request) from exc
             time.sleep(min(0.5 * 2 ** attempt, 4))
+        raise anthropic.APIConnectionError(message='Provider request exhausted retries', request=request)
 
     def _extract_text(self, data):
         if self.protocol == 'openai_chat':
             choices = data.get('choices') or []
             if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
                 return ''
+            require_final_state(choices[0].get('finish_reason'), ('stop',))
             message = choices[0].get('message') or {}
             if not isinstance(message, dict):
                 return ''
+            if message.get('tool_calls') or message.get('function_call'):
+                raise IncompleteResponseError()
             content = message.get('content')
             if isinstance(content, str):
                 return content.strip()
@@ -86,9 +123,22 @@ class OpenAICompatibleClient:
                 return '\n'.join(part['text'] for part in content
                                  if isinstance(part, dict) and isinstance(part.get('text'), str)).strip()
             return ''
+        require_final_state(data.get('status'), ('completed',))
+        if data.get('incomplete_details'):
+            raise IncompleteResponseError()
         parts = []
         for item in data.get('output') or []:
-            if not isinstance(item, dict) or item.get('type') != 'message':
+            if not isinstance(item, dict):
+                continue
+            require_final_state(item.get('status'), ('completed',))
+            # These items hand work back to a caller; completing their arguments
+            # does not complete the answer for this text-only adapter.
+            if item.get('type') in (
+                'function_call', 'custom_tool_call', 'computer_call',
+                'local_shell_call', 'shell_call', 'apply_patch_call', 'mcp_approval_request',
+            ):
+                raise IncompleteResponseError()
+            if item.get('type') != 'message':
                 continue
             for part in item.get('content') or []:
                 if isinstance(part, dict) and part.get('type') == 'output_text' and isinstance(part.get('text'), str):

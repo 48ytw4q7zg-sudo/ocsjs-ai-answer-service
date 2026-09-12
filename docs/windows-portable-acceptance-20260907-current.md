@@ -13,7 +13,9 @@ and actual clean Windows 11 Sandbox acceptance.
 
 This is an accepted Windows 11 candidate within the recorded test scope, not a
 claim of complete Windows 10 validation or completion of the entire two-project
-goal. Actual Windows 10 execution and physical USB testing remain unverified.
+goal. Physical Windows 10 x64 testing was not performed and is user-waived
+(2026-09-08, non-blocking); physical USB testing and real provider-account
+validation remain unverified and were not waived.
 
 ## Current deliverable
 
@@ -171,11 +173,12 @@ the recorded build boundaries, not a malicious administrator controlling the
 entire build host. Optional packaging warnings are not silently treated as proof
 that every possible third-party feature was exercised.
 
-1. Actual Windows 10 x64 startup and feature acceptance: unverified; a target
-   machine is still needed.
-2. Physical USB and other hardware/managed-device policies: unverified.
+1. Actual Windows 10 x64 startup and feature acceptance: not physically tested;
+   user-waived 2026-09-08 and non-blocking. A target machine is still needed to
+   convert this waiver into physical evidence.
+2. Physical USB and other hardware/managed-device policies: unverified; not waived.
 3. Real provider accounts, credentials, model availability and billing: unverified;
-   synthetic local protocol checks are not account certification.
+   not waived; synthetic local protocol checks are not account certification.
 4. Windows 7/8.1, 32-bit systems and native ARM64 are outside the agreed target.
 
 Older release directories and failed checkpoints remain preserved. Use the exact

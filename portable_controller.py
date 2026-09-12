@@ -203,8 +203,14 @@ class PortableController:
                     pass
             if thread.is_alive():
                 thread.join(timeout=3)
-        client = self.module.client
+        client = None
+        with self.module._runtime_lock:
+            client = self.module.client
+            self.module.client = None
         if client is not None and hasattr(client, "close"):
-            client.close()
+            try:
+                client.close()
+            except Exception:
+                pass
         self.api_key = ""
         self.access_token = ""

@@ -2,9 +2,11 @@
 
 import importlib.util
 from pathlib import Path
+import struct
+import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -133,6 +135,116 @@ class SnapshotIntegrityTests(unittest.TestCase):
         analysis['application_modules_executed'] = True
         with self.assertRaisesRegex(RuntimeError, 'Application modules executed'):
             verifier.assert_analysis_inputs(self.job, analysis)
+
+    def test_verify_writes_waiver_and_unverified_limits_to_bundle_evidence(self):
+        bundle = self.job / 'release' / 'EduBrain'
+        for relative in ('data', '_internal/licenses/python', '_internal/templates'):
+            (bundle / relative).mkdir(parents=True)
+        for relative in ('README.txt', 'LICENSE.txt', '_internal/licenses/python/LICENSE.txt'):
+            (bundle / relative).write_text('Synthetic fixture only.\n', encoding='utf-8')
+        verifier.shutil.copy2(self.snapshot / 'templates/index.html',
+                              bundle / '_internal/templates/index.html')
+        # Minimal PE headers exercise inventory checks; these files must never execute.
+        for name, subsystem in (('EduBrain.exe', 2), ('EduBrain-console.exe', 3)):
+            binary = bytearray(160)
+            binary[:2] = b'MZ'
+            struct.pack_into('<I', binary, 0x3c, 64)
+            binary[64:68] = b'PE\0\0'
+            struct.pack_into('<H', binary, 68, 0x8664)
+            struct.pack_into('<H', binary, 156, subsystem)
+            (bundle / name).write_bytes(binary)
+        verifier.save(self.evidence / 'analysis-inputs.json', self.analysis())
+        empty_path = self.job / 'empty executable path'
+        empty_path.mkdir()
+        (self.job / 'unrelated working directory').mkdir()
+        registry = MagicMock()
+        registry.QueryValueEx.side_effect = lambda key, name: (
+            {'DisplayVersion': 'synthetic', 'CurrentBuild': '0', 'UBR': 0,
+             'EditionId': 'Synthetic'}[name], 0)
+        with (
+            patch.dict(sys.modules, {'winreg': registry}),
+            patch.object(verifier, 'clean_environment', return_value={'PATH': str(empty_path)}),
+            patch.object(verifier, 'self_test', return_value={
+                'exit_code': 0, 'report': {'passed': True}, 'synthetic_fixture': True,
+            }) as self_test,
+            patch.object(verifier.subprocess, 'run', side_effect=AssertionError(
+                'Synthetic bundle verification must not launch a process')) as run,
+        ):
+            verifier.verify(self.job)
+            run.assert_not_called()
+        moved = self.job / 'USB \u4e2d\u6587 \u8def\u5f84' / '\u79fb\u52a8\u540e\u7684 EduBrain Portable'
+        self.assertEqual(self_test.call_count, 2)
+        self_test.assert_has_calls([
+            call(moved / 'EduBrain.exe', None, self.job, 'gui-self-test',
+                 frozen=True, windowed=True),
+            call(moved / 'EduBrain-console.exe', None, self.job, 'console-self-test',
+                 frozen=True, windowed=False),
+        ])
+        # Assert the persisted writer output, not just the detached status helper.
+        evidence = verifier.load(self.evidence / 'bundle-verification.json')
+        self.assertIs(evidence['passed'], True)
+        self.assertIs(evidence['zip_crc_passed'], True)
+        self.assertEqual(evidence['source_hashes_sha256'],
+                         verifier.digest(self.evidence / 'source-hashes.json'))
+        status = evidence['release_status']
+        windows = status['windows_10_x64']
+        self.assertIs(windows['physically_tested'], False)
+        self.assertIs(windows['user_waived'], True)
+        self.assertIs(windows['blocking'], False)
+        self.assertIn('Not physically tested', windows['note'])
+        self.assertIn('user-waived 2026-09-08', windows['note'])
+        self.assertIn('non-blocking', windows['note'])
+        self.assertIn(
+            'Windows 10 x64 (not physically tested; user-waived 2026-09-08; non-blocking)',
+            evidence['unverified'])
+        for name, description in (
+            ('physical_usb', 'A physical USB filesystem'),
+            ('real_provider_accounts', 'Real provider credentials/accounts/billing'),
+        ):
+            with self.subTest(release_status=name):
+                self.assertIs(status[name]['physically_tested'], False)
+                self.assertIs(status[name]['user_waived'], False)
+                self.assertIn('Explicitly unverified', status[name]['note'])
+                self.assertIn('not waived', status[name]['note'])
+                self.assertIn(description, evidence['unverified'])
+
+
+class ReleaseStatusMetadataTests(unittest.TestCase):
+    def test_windows_10_is_user_waived_and_non_blocking(self):
+        status = verifier.release_status()['windows_10_x64']
+        self.assertFalse(status['physically_tested'])
+        self.assertTrue(status['user_waived'])
+        self.assertFalse(status['blocking'])
+        self.assertIn('user-waived 2026-09-08', status['note'])
+        self.assertIn('non-blocking', status['note'])
+
+    def test_physical_usb_stays_explicitly_unverified_and_unwaived(self):
+        status = verifier.release_status()['physical_usb']
+        self.assertFalse(status['physically_tested'])
+        self.assertFalse(status['user_waived'])
+        self.assertIn('Explicitly unverified', status['note'])
+        self.assertIn('not waived', status['note'])
+
+    def test_real_provider_accounts_stay_explicitly_unverified_and_unwaived(self):
+        status = verifier.release_status()['real_provider_accounts']
+        self.assertFalse(status['physically_tested'])
+        self.assertFalse(status['user_waived'])
+        self.assertIn('Explicitly unverified', status['note'])
+        self.assertIn('not waived', status['note'])
+
+    def test_generated_evidence_fields_align_with_waiver(self):
+        evidence = verifier.release_evidence_status()
+        self.assertIn('unverified', evidence)
+        self.assertIn('release_status', evidence)
+        self.assertEqual(
+            evidence['unverified'][0],
+            'Windows 10 x64 (not physically tested; user-waived 2026-09-08; non-blocking)')
+        self.assertIn('A physical USB filesystem', evidence['unverified'])
+        self.assertIn('Real provider credentials/accounts/billing', evidence['unverified'])
+        self.assertFalse(evidence['release_status']['windows_10_x64']['blocking'])
+        self.assertTrue(evidence['release_status']['windows_10_x64']['user_waived'])
+        self.assertFalse(evidence['release_status']['physical_usb']['user_waived'])
+        self.assertFalse(evidence['release_status']['real_provider_accounts']['user_waived'])
 
 
 if __name__ == '__main__':

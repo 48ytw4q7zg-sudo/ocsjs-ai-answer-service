@@ -11,6 +11,9 @@ services:
       - .env
     environment:
       PORT: "${PORT:-5000}"
+      # Published container ports require an all-interfaces bind.
+      HOST: "0.0.0.0"
+      DEBUG: "false"
     # Docker 容器访问宿主机 ccswitch 代理（127.0.0.1:15721）
     # 方式1：使用 host.docker.internal（Windows/Mac 自动支持）
     extra_hosts:

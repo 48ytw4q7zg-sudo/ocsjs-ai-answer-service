@@ -64,8 +64,14 @@ PyInstaller output, host version and final `build-result.json`. Failed phases wr
 
 This workflow prepares a locally verified, unsigned artifact for parent review.
 It is not a qualifying independent review. A minimal PATH run on the build host
-does not prove compatibility with every Windows 10/11 build, a clean OS, physical
+does not prove compatibility with every Windows 11 build, a clean OS, physical
 USB storage, real model accounts or billing. Those results remain unverified.
+
+Windows 10 x64 remains the documented target, but physical Windows 10 testing was
+not performed and is user-waived (2026-09-08); generated `bundle-verification.json`
+reports that item as not physically tested, user-waived, and non-blocking. Physical
+USB validation and real provider-account validation remain explicitly unverified
+and were not waived.
 
 Official packaging references:
 - https://pyinstaller.org/en/stable/usage.html

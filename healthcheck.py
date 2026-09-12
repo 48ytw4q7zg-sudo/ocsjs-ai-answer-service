@@ -14,7 +14,17 @@ def main() -> int:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(f'http://{host}:{Config.PORT}/api/health', timeout=3) as response:
             status = json.load(response)
-        return 0 if isinstance(status, dict) and status.get('runtime_ready') is True else 1
+        # Degraded still means the HTTP service is up; do not restart-loop
+        # containers just because provider credentials are not configured yet.
+        if not isinstance(status, dict):
+            return 1
+        ready = status.get('runtime_ready')
+        details = status.get('details')
+        # Degraded still means the HTTP service is up; do not restart-loop
+        # containers just because provider credentials are not configured yet.
+        if ready is True or details == 'protected' or status.get('status') == 'degraded':
+            return 0
+        return 1
     except (OSError, ValueError, urllib.error.URLError):
         return 1
 
