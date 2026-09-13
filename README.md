@@ -2,10 +2,33 @@
 
 基于 Anthropic 兼容协议的智能题库服务，专为 [OCS (Online Course Script)](https://github.com/ocsjs/ocsjs) 设计，通过 AI 自动回答题目。实现与 OCS AnswererWrapper 兼容的 API 接口，集成 ccswitch 动态配置，无需手动管理 API 密钥。
 
-**版本**: 2026.6.10.1739
-**作者**: QXW
+**运行时版本**：`2026.6.10.1739`（常量 `_SERVER_VERSION`）
+**作者**：QXW
+**当前交付状态**：源码 `main` + Windows x64 便携发行 `portable-20260913`（`release-verified`）
+
+| 项目 | 地址 |
+|------|------|
+| GitHub 源码仓库 | [48ytw4q7zg-sudo/ocsjs-ai-answer-service](https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service) |
+| Gitee 源码仓库 | [qinxinwei123/ocsjs-ai-answer-service](https://gitee.com/qinxinwei123/ocsjs-ai-answer-service) |
+| 最新 Windows x64 便携包 | [Release portable-20260913](https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/tag/portable-20260913) |
+| 便携交付记录 | [docs/portable-delivery-20260912.md](docs/portable-delivery-20260912.md) |
+
+便携包构建源码提交 `228b38c`；ZIP SHA256 `04167abcebdbc34992bbaec0ee63f0a8ba0bb38afc58667dc420652cc76a1810`。
 
 > 文中 `v2.1.0` / `v2.2.0` 为历史功能标签；运行时版本常量以代码 `_SERVER_VERSION = "2026.6.10.1739"` 为准。
+
+---
+
+## 系统介绍（最新版）
+
+EduBrain 提供两类运行形态：
+
+| 形态 | 入口 | 说明 |
+|------|------|------|
+| **Windows 便携版** | Release 中 `EduBrain.exe` | 原生 Tk 窗口 + 本机回环服务，无需安装 Python/Docker |
+| **源码服务** | `app.py` | Flask，可 Gunicorn/Docker 部署，供 OCS 调用 `/api/search` |
+
+核心能力：OCS 兼容搜索接口、ccswitch 热重载与模型名净化、线程安全缓存与全题型答案清洗、可选 ACCESS_TOKEN、Windows 便携 GUI 与合成自检。
 
 ---
 
@@ -41,14 +64,19 @@
 - **全题型答案清洗** (v2.2.0): 自动去除"答案："等前缀、尾标点；单选/多选可按当前 options 把 A/B/C 字母答案映射为真实选项文本；单选可剥离模型附带的简短解释；判断题中英文标准化
 - **OCS 请求兼容**: `/api/search` 支持 GET、表单、标准 `application/json` 与 `application/*+json`；题干字段兼容 `title`/`question`/`q`/`content`/`text`，题型字段兼容 `type`/`questionType`/`question_type`，选项字段兼容 `options`/`choices`/`answers` 等常见别名；选项支持字符串、字符串数组、对象数组（如 `{label,text}`）或键值对象（如 `{A:"上海"}`），会统一换行、去除空行和首尾空格，减少重复缓存和选项解析误差
 - **Docker 部署**: 提供 Dockerfile + docker-compose.yml，支持容器化运行
+- **Windows 便携包** (portable-20260913): `EduBrain.exe` / `EduBrain-console.exe` 自带运行库与本地静态资源，可离线打开界面
 
 ---
 
 ## 系统要求
 
-- 源码运行需要 Python 3.10+（建议使用 3.12）；Windows 便携包不需要本机 Python。
-- [ccswitch](https://github.com/ccswitch/ccswitch)（推荐，自动管理 API 密钥和模型配置）
-- 或手动配置：DeepSeek / Anthropic 兼容 API 密钥
+| 运行方式 | 要求 |
+|----------|------|
+| **Windows 便携包** | Windows 10/11 x64；无需本机 Python/Node/Docker；需可写目录 |
+| **源码运行** | Python 3.10+（建议 3.12） |
+| **AI 配置** | [ccswitch](https://github.com/ccswitch/ccswitch)（推荐）或手动配置 DeepSeek / Anthropic 兼容 API |
+| **Docker** | Docker + Docker Compose（可选） |
+| **Node** | 仅跑 `test_*.cjs` 浏览器/静态资源测试时需要 |
 
 ---
 
@@ -56,13 +84,206 @@
 
 当前运行时恢复、缓存与答案处理、页面认证的说明及验证边界见 [功能完整性记录](docs/functional-completion.md)。缺少可用 AI 配置时首页与健康接口仍可访问；配置重载失败会保留原运行时。首页可填写访问令牌，令牌通过请求体传递。
 
-### 1. 克隆代码库
+### 方式 A：Windows 便携包（推荐普通用户）
+
+1. 打开 [Releases](https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/latest)。
+2. 下载 `EduBrain-Windows-x64.zip` 与 `SHA256SUMS.txt`，校验 SHA256。
+3. 解压到可写目录，双击 `EduBrain.exe`（诊断用 `EduBrain-console.exe`）。
+4. 在原生窗口填写协议、服务地址、模型标识和 API Key，应用后提交问答。
+5. 关闭窗口会停止本地回环服务。数据默认在 EXE 旁 `data/`。完整说明见 `packaging/PORTABLE_README.txt`。
+
+合成自检（不调用真实模型）：
+
+```powershell
+.\EduBrain.exe --self-test --self-test-output "D:\便携测试\gui.json"
+.\EduBrain-console.exe --self-test --self-test-output "D:\便携测试\console.json"
+```
+
+### 方式 B：克隆源码后本地启动（见下方部署指南）
+
+### 方式 C：Docker
+
+```powershell
+git clone https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service.git
+cd ocsjs-ai-answer-service
+copy .env.example .env
+docker compose up -d
+```
+
+---
+
+## 从 GitHub 部署到本机并成功运行
+
+默认源码部署目标：本机 `http://127.0.0.1:5000`。
+
+### 第 0 步：准备工具
+
+| 工具 | 必需？ | 检查命令 |
+|------|:------:|----------|
+| Git | 是 | `git --version` |
+| Python 3.10+ 64 位 | 是（源码） | `python --version` |
+| pip | 是 | `python -m pip --version` |
+| Docker Desktop | 仅容器部署 | `docker --version` |
+| Node 18+ | 仅 `.cjs` 测试 | `node --version` |
+| ccswitch 或 API Key | 答题必需 | 见下一步 |
+
+### 第 1 步：获取代码
+
+```powershell
+# GitHub（推荐）
+git clone https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service.git
+cd ocsjs-ai-answer-service
+
+# 或 Gitee
+# git clone https://gitee.com/qinxinwei123/ocsjs-ai-answer-service.git
+```
+
+### 第 2 步：创建虚拟环境并安装依赖
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+pip install -r requirements.txt
+```
+
+Windows 若无法执行脚本：先 `Set-ExecutionPolicy -Scope Process RemoteSigned`，或改用 `.\.venv\Scripts\python.exe` 直接运行。
+
+### 第 3 步：配置 AI（二选一）
+
+**方式一（推荐）：使用 ccswitch**
+
+若本机已运行 ccswitch，服务会自动读取 `~/.claude/settings.json` 中的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`，通常无需再写 `.env`。
+
+**方式二：手动 `.env`**
+
+```powershell
+copy .env.example .env
+# 编辑 .env，至少填写：
+# ANTHROPIC_API_KEY=your_api_key_here
+# ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+# ANTHROPIC_MODEL=deepseek-v4-pro
+```
+
+可选安全项：
+
+```ini
+ACCESS_TOKEN=please_change_me
+HOST=127.0.0.1
+PORT=5000
+DEBUG=False
+```
+
+> 默认只监听 `127.0.0.1`。Docker 或局域网访问时显式设置 `HOST=0.0.0.0`。切勿提交真实 `.env`。
+
+### 第 4 步：启动服务
+
+```powershell
+python app.py
+```
+
+预期日志类似：
+
+```text
+配置来源: ccswitch
+AI 模型: deepseek-v4-pro, Base URL: http://127.0.0.1:15721
+```
+
+浏览器打开：
+
+| 地址 | 用途 |
+|------|------|
+| `http://127.0.0.1:5000/` | 问答测试首页 |
+| `http://127.0.0.1:5000/dashboard` | 仪表盘（配置了令牌时用 `?token=`） |
+| `http://127.0.0.1:5000/docs` | API 文档 |
+| `http://127.0.0.1:5000/api/health` | 健康检查 |
+
+### 第 5 步：健康检查与冒烟
+
+```powershell
+python health_smoke.py --host 127.0.0.1 --port 5000 --json --output health_smoke.json
+```
+
+退出码 `0` 表示探测通过。配置了 `ACCESS_TOKEN` 时可加 `--check-protected` 验证匿名降级。
+
+### 第 6 步：在 OCS 中接入
+
+仓库示例见 `ocs_config_example.json`：
+
+```json
+[
+  {
+    "name": "AI智能题库",
+    "url": "http://localhost:5000/api/search",
+    "method": "get",
+    "type": "GM_xmlhttpRequest",
+    "contentType": "json",
+    "data": {
+      "title": "${title}",
+      "type": "${type}",
+      "options": "${options}"
+    },
+    "handler": "return (res)=> res.code === 1 ? [res.question, res.answer] : [res.msg, undefined]"
+  }
+]
+```
+
+配置了 `ACCESS_TOKEN` 时，在请求头或 URL 中带上 `token`。
+
+### 第 7 步：生产启动（可选）
+
+```powershell
+# 使用仓库自带 gunicorn 配置（单进程 gthread，保留内存缓存一致性）
+gunicorn --config gunicorn.conf.py app:app
+
+# Docker
+docker build -t ai-answer-service .
+docker run -p 5000:5000 --env-file .env ai-answer-service
+
+# Docker Compose
+docker compose up -d
+```
+
+> 若 ccswitch 只监听 `127.0.0.1:15721`，容器内应把 `ANTHROPIC_BASE_URL` 配成 `http://host.docker.internal:15721/...`（compose 已配置 `host.docker.internal`）。
+
+### 第 8 步：推送到你自己的 GitHub 仓库（可选）
+
+```powershell
+git remote add mine https://github.com/<你的用户名>/ocsjs-ai-answer-service.git
+git push -u mine main
+```
+
+### 第 9 步：构建 Windows 便携包（可选，维护者）
+
+在项目构建 venv 与门禁齐全的前提下：
+
+```powershell
+& .\build_windows.ps1
+```
+
+细节见 [packaging/BUILD_WINDOWS.md](packaging/BUILD_WINDOWS.md)。产物为 `dist/EduBrain-Windows-x64-<时间戳>/` 下的文件夹、ZIP 与校验和。
+
+### 第 10 步：跑回归测试（可选）
+
+```powershell
+& .\.build\venv\Scripts\python.exe test_portable_foundation.py -v
+& .\.build\venv\Scripts\python.exe test_app_safety.py -v
+& .\.build\venv\Scripts\python.exe tests\test_security_and_config.py -v
+& .\.build\venv\Scripts\python.exe packaging\test_snapshot_integrity.py -v
+```
+
+请勿提交或打印 `.env` / 真实密钥。
+
+---
+
+## 1. 克隆代码库（兼容旧说明）
 
 ```bash
+git clone https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service.git
+# 或
 git clone https://gitee.com/qinxinwei123/ocsjs-ai-answer-service.git
 cd ocsjs-ai-answer-service
 ```
-
 ### 2. 安装依赖
 
 ```bash
@@ -156,17 +377,28 @@ ocsjs-ai-answer-service/
 ├── portable_selftest.py    # 合成自检
 ├── portable_paths.py       # 便携路径解析
 ├── portable_settings.py    # 偏好与可选加密配置
+├── source_launcher.py      # 源码启动入口
 ├── healthcheck.py          # Docker/健康探针 (python healthcheck.py)
 ├── health_smoke.py         # 健康检查冒烟脚本
 ├── requirements.txt        # Python 依赖清单
 ├── packaging/              # Windows 便携打包与完整性门禁
+│   ├── BUILD_WINDOWS.md
+│   ├── PORTABLE_README.txt
+│   └── windows.spec
+├── docs/                   # 功能完整性、便携交付、验收记录
+├── tests/                  # 安全与配置测试
 ├── Dockerfile              # Docker 镜像 (python:3.12-slim, HOST=0.0.0.0)
 ├── docker-compose.yml      # Docker Compose
-├── .env.example            # 环境变量配置模板
+├── gunicorn.conf.py        # 生产单进程 gthread 配置
+├── .env.example            # 环境变量配置模板（勿提交真实 .env）
 ├── api_docs.md             # API 文档
 ├── ocs_config_example.json # OCS 配置示例
+├── build_windows.ps1       # Windows 便携构建脚本
 ├── static/                 # 本地 vendor 资源与样式
-└── templates/              # index.html / dashboard.html
+├── templates/              # index.html / dashboard.html
+├── AGENTS.md               # 代理协作约定
+├── THIRD_PARTY_NOTICES.md  # 第三方组件声明
+└── README.md               # 本文件
 ```
 
 ---
@@ -1377,12 +1609,21 @@ git -c http.sslBackend=openssl push origin main
 
 ## 技术栈
 
-- **后端**: Flask + Gunicorn
-- **AI**: Anthropic 兼容协议 (DeepSeek / ccswitch 代理)
-- **前端**: Bootstrap 5 + DataTables + Axios + jQuery
+- **后端**: Flask + Gunicorn / Waitress
+- **AI**: Anthropic 兼容协议（DeepSeek / ccswitch 代理 / OpenAI chat·responses 适配）
+- **前端**: Bootstrap 5 + DataTables + Axios + jQuery（本地 vendor 资源）
 - **缓存**: 线程安全内存缓存 (MD5 + TTL + LRU)
 - **配置**: ccswitch 实时读取 + 模型名净化 + 运行时重载
-- **部署**: Docker + Docker Compose
+- **部署**: Windows 便携包 / Docker + Docker Compose
+
+---
+
+## 贡献
+
+1. Fork [GitHub 仓库](https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service)
+2. 创建分支：`git checkout -b feat/short-desc`
+3. 提交改动（勿改弱 `packaging/verify_portable.py` 完整性门禁；勿提交 `.env`）
+4. 推送并打开 PR
 
 ---
 
