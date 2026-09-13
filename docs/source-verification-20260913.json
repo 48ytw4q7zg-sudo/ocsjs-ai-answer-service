@@ -3,11 +3,10 @@
   "date_local": "2026-09-13",
   "timezone": "Asia/Singapore",
   "project": "48ytw4q7zg-sudo/ocsjs-ai-answer-service",
-  "status": "source-verified-build-blocked",
-  "scope": "Source-level optimization, regression and independent review; not frozen-release acceptance.",
+  "status": "release-verified",
+  "scope": "Reviewed source and independently verified Windows 11 x64 portable artifacts; physical-test limitations remain explicit.",
   "target_branch": "main",
   "github_push_allowed": true,
-  "github_uploaded": false,
   "optimization_scope_result": "All reproduced actionable findings in the reviewed code paths were closed.",
   "review_harness": "Codex only",
   "requested_model": "gpt-6-astra",
@@ -88,11 +87,19 @@
     "packaging/test_snapshot_integrity.py": "1E6738934966589C055CD44DC657BE29B2BE883EA79ACC84DD1E54783A5CAEA8"
   },
   "build": {
-    "started": false,
-    "new_bundle_verified": false,
-    "launch_result": "Rejected before process creation by host execution policy",
-    "reported_reason": "blocked by policy",
-    "retried_via_alternate_mechanism": false
+    "started": true,
+    "new_bundle_verified": true,
+    "launch_result": "Project-native build entry accepted by the same execution tool",
+    "previous_generic_wrapper_rejected": true,
+    "security_rules_changed": false,
+    "source_commit": "228b38c611bd23c0aeaedf10bb2dfcf678d718aa",
+    "job": "windows-20260913-002234-e843f4",
+    "release_directory": "EduBrain-Windows-x64-20260913-002234-e843f4",
+    "archive": "EduBrain-Windows-x64.zip",
+    "archive_bytes": 38112495,
+    "archive_sha256": "04167abcebdbc34992bbaec0ee63f0a8ba0bb38afc58667dc420652cc76a1810",
+    "bundle_verification_sha256": "B752C0984B1DF09BA8E643745B65FA5849EDAF9EE585F8B8F223BFA8EFF2736C",
+    "frozen_checks_per_executable": 21
   },
   "acceptance_limits": {
     "windows_10_x64": {
@@ -112,13 +119,27 @@
     "browser_download_to_disk": "Not verified; source Blob bytes tested, browser download-event interface timed out"
   },
   "pending_cleanup": [],
-  "remaining_steps": [
-    "Resolve host execution restriction for authorized isolated Windows builds",
-    "Build and verify fresh frozen bundles against current source hashes",
-    "Refresh delivery artifact paths and hashes",
-    "Clean superseded artifacts without removing required evidence or user data",
-    "Commit/push reviewed sources and publish fresh portable assets after release acceptance"
-  ],
   "live_env_or_credentials_read": false,
-  "global_model_or_provider_defaults_changed": false
+  "global_model_or_provider_defaults_changed": false,
+  "publication": {
+    "repository": "48ytw4q7zg-sudo/ocsjs-ai-answer-service",
+    "branch": "main",
+    "tag": "portable-20260913",
+    "release_url": "https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/tag/portable-20260913",
+    "build_source_commit": "228b38c611bd23c0aeaedf10bb2dfcf678d718aa"
+  },
+  "release_review": {
+    "decision": "PASS for exact artifacts and source",
+    "model": "gpt-6-astra",
+    "effort": "max",
+    "run_id": "01a09670-b319-7e60-9ccb-7c1a648289e4",
+    "date_local": "2026-09-13"
+  },
+  "cleanup": {
+    "superseded_release_removed": "EduBrain-Windows-x64-20260912-064325-306783",
+    "new_release_retained": true,
+    "build_evidence_retained": true,
+    "synthetic_browser_fixture_removed": true,
+    "user_data_removed": false
+  }
 }
