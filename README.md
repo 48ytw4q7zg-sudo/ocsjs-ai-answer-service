@@ -30,7 +30,7 @@ EduBrain 提供两类运行形态：
 
 核心能力：OCS 兼容搜索接口、ccswitch 热重载与模型名净化、线程安全缓存与全题型答案清洗、可选 ACCESS_TOKEN、Windows 便携 GUI 与合成自检。
 
-**电脑新手**请看「新手教程」；**会终端、嫌啰嗦**请看「快速教程（大学生版）」。
+**电脑新手**看「新手教程」；**会终端**看「快速教程（大学生版）」。教程按**刚重装的干净 Windows x64** 编写；Windows 源码请用 `python app.py` / `start.bat`，**不要用 gunicorn**。
 
 ---
 
@@ -83,348 +83,242 @@ EduBrain 提供两类运行形态：
 ---
 
 
-## 选你的教程
+## 选你的教程（按干净 Windows 写）
 
 | 你是谁 | 看哪一段 |
 |--------|----------|
-| 电脑新手（约初中水平），要一步一步点鼠标 | 下一节 **新手教程** |
-| 会用终端的大学生 / 嫌上面啰嗦 | 下面 **快速教程（大学生版）** |
-## 快速教程（大学生版）
+| 电脑新手（约初中），要一步一步点鼠标 | **新手教程** |
+| 会用终端、嫌啰嗦 | **快速教程（大学生版）** |
 
-> 假设你会：venv、pip、改 `.env`、起本地 HTTP。排错与截图级步骤见后文新手教程。
+> **重要前提（官方验收边界）**  
+> - 便携包实测：**Windows 11 Pro x64**（build 26200）。  
+> - **仅支持 Windows 10/11 x64**；32 位、Win7/8.1、**原生 ARM64** 不支持。  
+> - **Windows 10 x64 未实机测试**（用户豁免、非阻塞），不能当成“官方已通过”。  
+> - 便携包**未签名**；干净系统 SmartScreen 会拦，属预期。  
+> - 便携包**已内置** Python/Tk、静态资源、CA、**Waitress** 等依赖；目标机**不必**再装 Python、Node、Docker、浏览器组件。  
+> - **Windows 源码运行不要用 gunicorn**（类 Unix 服务端；本仓库 Windows 便携/源码推荐 `python app.py` 或 `start.bat`，内部用 Werkzeug/Waitress）。  
+> - 界面打开成功 ≠ 模型一定回答成功；还需要**有效 API Key / 额度**。
 
-### 三选一
+### 干净系统 30 秒自检
 
-| 场景 | 做法 |
-|------|------|
-| 本机 GUI 最快 | Release 下 `EduBrain-Windows-x64.zip` → 解压 → `EduBrain.exe` |
-| 本地 API / 对接 OCS | 源码 + venv + `.env` + `python app.py` |
-| 容器 | `docker compose up -d` |
+1. 设置 → 系统 → 系统信息：**系统类型 = 64 位 / x64**（ARM64/32 位请停止）。  
+2. 准备可写目录，如 `D:\Tools`（**不要** Program Files）。  
+3. 确认能访问你选用的 AI 服务商；准备 API Key（源码/便携都要用）。  
+4. 若走源码：准备 **python.org 官方 64 位 Python 3.10+**（建议 3.12），**不要** Microsoft Store 版。
 
-### 便携包
+---
+
+## 快速教程（大学生版 · 干净系统）
+
+### A. 便携包（干净机首选）
 
 ```powershell
-# https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/latest
-Expand-Archive .\EduBrain-Windows-x64.zip -DestinationPath D:\EduBrain
-D:\EduBrain\EduBrain\EduBrain.exe
-# 诊断入口
-D:\EduBrain\EduBrain\EduBrain-console.exe
+(Get-CimInstance Win32_ComputerSystem).SystemType  # 需 x64-based
+
+# Release: portable-20260913
+# https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/tag/portable-20260913
+# ZIP SHA256: 04167abcebdbc34992bbaec0ee63f0a8ba0bb38afc58667dc420652cc76a1810
+
+New-Item -ItemType Directory -Force D:\Tools | Out-Null
+Expand-Archive .\EduBrain-Windows-x64.zip -DestinationPath D:\Tools -Force
+Set-Location D:\Tools\EduBrain
+# 应看到 EduBrain.exe / EduBrain-console.exe / _internal / data
+.\EduBrain.exe   # GUI；SmartScreen：更多信息→仍要运行
 ```
 
-### 源码（Python ≥3.10，建议 3.12）
+合成自检（不调用真实模型）：
 
 ```powershell
+.\EduBrain-console.exe --self-test --self-test-output "D:\Tools\edu-selftest.json"
+```
+
+窗口内填 Base URL / 模型 / API Key → 应用 → 提问。密钥默认不落盘；加密保存则换机需同一密码。
+
+### B. 源码（Python ≥3.10，建议 3.12）
+
+```powershell
+# 必须 python.org x64，勾选 Add python.exe to PATH
+Get-Command python | Format-List Source
+py -3.12 -c "import sys; print(sys.version); assert sys.maxsize>2**32"
+
 git clone https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service.git
 cd ocsjs-ai-answer-service
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1   # CMD: .venv\Scripts\activate.bat
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-# 有 ccswitch 可跳过 .env；否则：
+
 Copy-Item .env.example .env
-# 编辑 .env：ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL；默认 HOST=127.0.0.1 PORT=5000
+# 编辑 .env：ANTHROPIC_API_KEY / BASE_URL / MODEL；默认 HOST=127.0.0.1 PORT=5000
+
+# Windows 推荐（不要 gunicorn）
 python app.py
-# 浏览器: http://127.0.0.1:5000/  /api/health  /dashboard  /docs
+# 或双击/运行 start.bat（会选 .venv → py -3 → python）
+
+# 浏览器
+# http://127.0.0.1:5000/
+# http://127.0.0.1:5000/api/health
 python health_smoke.py --host 127.0.0.1 --port 5000
 ```
 
-生产：`gunicorn --config gunicorn.conf.py app:app`。容器里访问宿主机 ccswitch 用 `http://host.docker.internal:15721/...`。
+PowerShell 若禁脚本：`Set-ExecutionPolicy -Scope Process RemoteSigned`。  
+生产 Linux/容器才用 `gunicorn --config gunicorn.conf.py app:app` 或 compose；Windows 开发机用 `app.py` / `start.bat`。
 
-### OCS
+### C. OCS
 
-`POST/GET http://127.0.0.1:5000/api/search`，字段别名兼容 `title`/`options`/`type`；示例见 `ocs_config_example.json`。配置 `ACCESS_TOKEN` 时带 `X-Access-Token` 或 `?token=`。
+`GET/POST http://127.0.0.1:5000/api/search`，字段别名见 `ocs_config_example.json`。配了 `ACCESS_TOKEN` 则带 `X-Access-Token` 或 `?token=`。
 
-### 环境摘要
+### 干净系统环境表
 
-| 路径 | 依赖 |
-|------|------|
-| 便携包 | Win10/11 x64，无本机 Python/Docker |
-| 源码 | Python 3.10+，`requirements.txt`（Flask/anthropic/gunicorn/waitress…） |
-| 可选 | ccswitch 或 API Key；Docker；Node 仅 `.cjs` 测试 |
+| 路径 | 需要安装 |
+|------|----------|
+| 便携包 | **无**（无 Python/Docker/Node；包内含运行库） |
+| 源码 | python.org **64 位 Python 3.10+** + `pip install -r requirements.txt` |
+| AI | 有效 Key/账号；ccswitch 可选 |
+| Docker | 仅容器路线 |
+| Node | 仅 `test_*.cjs` |
+| gunicorn | **Windows 上不要用**；那是 Linux/容器入口 |
 
-**安全：** 勿提交 `.env`；默认只听回环；生产/局域网才 `HOST=0.0.0.0`。
-
----
-## 新手教程：一步一步装好并用起来
-
-> 按「电脑新手 / 初中生」写。只想尽快在网页上答题：优先 **路线一（便携版）**。  
-> 源码路线需要装 Python、下载代码、配置密钥，步骤多，但每一步都写清了。
-
-### 先认识几个词
-
-| 词 | 白话解释 |
-|----|----------|
-| **浏览器** | 上网软件，Windows 自带 **Microsoft Edge** |
-| **ZIP** | 压缩包，需先解压 |
-| **解压** | 右键 → 全部解压缩，把文件夹拿出来 |
-| **双击** | 鼠标左键快速点两下 |
-| **GitHub** | 存源码和安装包的网站，地址见文首表格 |
-| **Release** | 作者打好的安装包，下 ZIP 即可 |
-| **API Key** | AI 服务商发给你的「钥匙」，类似密码，**不要发到网上** |
-| **端口 5000** | 本机服务门牌号。地址 `http://127.0.0.1:5000` 表示「我这台电脑的 5000 号门」 |
-| **Python** | 一种编程运行环境。便携版自带，源码运行才要自己装 |
-| **OCS** | 本服务对接的答题脚本项目，浏览器油猴脚本 |
-
-### 路线怎么选
-
-| 你想做什么 | 走哪条 |
-|------------|--------|
-| 本机双击就能用，界面填密钥问答 | **路线一：Windows 便携版（推荐）** |
-| 给 OCS 网页脚本当后端 / 想改代码 | **路线二：源码运行** |
-| 已有 Docker 的老手 | 路线二最后的 Docker 小节 |
-
-**注意：** 不管哪条路线，真正让 AI「答题」都需要 **可用的 AI 服务**（DeepSeek / Anthropic 兼容 API，或你本机已有的 ccswitch）。没有密钥时，程序可能能打开，但问不出答案。
+`requirements.txt`（源码）：flask、itsdangerous、python-dotenv、anthropic>=1,<2、gunicorn、markdown、httpx、certifi、waitress、cryptography。  
+（gunicorn 在 Windows 源码运行可不使用；waitress/app.py 即可。）
 
 ---
 
-### 路线一：Windows 便携版（推荐新手）
+## 新手教程（初中水平 · 假设电脑刚重装）
 
-#### 1.1 打开下载页
+### 第 0 步：确认电脑
 
-1. 打开 **Microsoft Edge**。  
-2. 地址栏粘贴并回车：  
+1. 开始 → 设置 → 系统 → 系统信息。  
+2. **系统类型** 必须是 **64 位 / x64**。ARM64 或 32 位 → 停止。  
+3. 新建 `D:\Tools` 之类可写文件夹；不要用 `C:\Program Files`。  
+4. 准备一个 AI 服务商账号和 **API Key**（没有 Key，程序能开也可能答不了题）。
+
+### 第 1 步：下载 EduBrain 便携包
+
+1. 打开 Edge，进入：  
    `https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/latest`  
-3. 页面标题类似 **EduBrain Windows x64 portable 2026-09-13**。
+2. 在 Assets 下载 **`EduBrain-Windows-x64.zip`**（当前发行 portable-20260913，约 38 MB）。  
+3. `Ctrl+J` 打开下载列表，进入下载文件夹。
 
-#### 1.2 下载
+> GitHub 失败：用 Gitee 或代下。不要下成 Source code 自动包去当安装包解压使用（那是源码，要装 Python）。
 
-1. 在 **Assets** 里点 **`EduBrain-Windows-x64.zip`**。  
-2. （可选）再点 **`SHA256SUMS.txt`** 做校验，新手可跳过。  
-3. 按 `Ctrl+J` 看下载位置，通常是 **下载** 文件夹。
+### 第 2 步：完整解压
 
-#### 1.3 解压
+1. 右键 ZIP → **全部解压缩…** → 解压到 `D:\Tools`。  
+2. 打开 `D:\Tools\EduBrain`，应同时有：  
+   - `EduBrain.exe`（日常用）  
+   - `EduBrain-console.exe`（排查用）  
+   - `_internal\`  
+   - `data\`（可能为空）  
+   - `LICENSE.txt`、`README.txt`  
 
-1. `Win+E` 打开文件资源管理器 → **下载**。  
-2. **右键** ZIP → **全部解压缩…**。  
-3. 建议解压到例如：`D:\EduBrain` 或桌面。  
-4. 等进度条结束。
+**检查：**
 
-**新手必读：**
+- [ ] 不在 ZIP 内直接双击  
+- [ ] 没删 `_internal`  
+- [ ] 没有只拷 exe  
+- [ ] 不在 Program Files  
+- [ ] 是 x64 Windows  
 
-- 必须进入**解压后的文件夹**再运行，**不要**在 ZIP 里双击 EXE。  
-- **不要**只拷 `EduBrain.exe`，要拷整个文件夹（必须带 `_internal`）。  
-- 不要放 `C:\Program Files`，要选你能写的目录。  
-- 数据会出现在 EXE 旁边的 `data` 文件夹（第一次可能还没有）。
+### 第 3 步：打开并配置
 
-#### 1.4 打开程序
+1. 双击 `EduBrain.exe`。  
+2. SmartScreen：**更多信息 → 仍要运行**。  
+3. 窗口里填写（以你服务商文档为准）：  
+   - 协议：通常 Anthropic 兼容  
+   - 服务地址 Base URL：例如 `https://api.deepseek.com/anthropic`（示例，以服务商为准）  
+   - 模型 ID  
+   - API Key（`sk-...`，**不要发给任何人**）  
+4. 点应用/保存，再在输入框提问。  
+5. 关窗口会停服务。程序在 U 盘上时，等完全退出再拔。
 
-1. 进入文件夹，找到：  
-   `EduBrain.exe` ← 日常使用  
-   `EduBrain-console.exe` ← 出问题排查时用  
-   `_internal\`  
-2. **双击 `EduBrain.exe`**。  
-3. 若提示「Windows 已保护你的电脑」：点 **更多信息** → **仍要运行**（未签名属正常）。  
-4. 出现原生窗口 = 打开成功。
+**说明：** 窗口打开成功只表示本机程序就绪；答案失败多半是 Key/网络/额度，不是没装好。
 
-#### 1.5 在窗口里填配置并提问
+### 第 4 步：（可选）合成自检
 
-1. 按界面填写 **协议**（如 Anthropic）、**服务地址（Base URL）**、**模型名**、**API Key**。  
-   示例（以你自己的服务商说明为准）：  
-   - Base URL：`https://api.deepseek.com/anthropic`  
-   - 模型：服务商文档里的模型 ID  
-   - API Key：在服务商控制台创建，形如 `sk-...`  
-2. 点 **应用/保存**（以窗口按钮文案为准）。  
-3. 在输入框写题目 → **提交/获取答案**。  
-4. 关闭窗口会停止本机服务。等完全退出后再拔 U 盘（若放在 U 盘上）。
-
-**密钥安全：**
-
-- API Key 只在本机使用，不要发到群里、不要贴到公开仓库。  
-- 若窗口提供「加密保存」，换电脑要用同一密码才能解开。  
-- 默认不保存密钥；关了窗口可能要重填。
-
-#### 1.6 自检（可选，不调用真实 AI）
-
-在程序文件夹打开 PowerShell：
+在 `D:\Tools\EduBrain` 地址栏输入 `powershell` 回车：
 
 ```powershell
-.\EduBrain.exe --self-test --self-test-output "D:\EduBrain-test\gui.json"
+.\EduBrain-console.exe --self-test --self-test-output "$env:USERPROFILE\Desktop\edu-selftest.json"
 ```
 
-结束后看 JSON 里是否成功。无控制台窗口的 `EduBrain.exe` 请看指定输出文件。
+看 JSON 是否通过。`EduBrain.exe` 无控制台，自检结果要看你指定的文件。
 
----
+### 第 5 步：源码运行（干净机，给 OCS 当后端）
 
-### 路线二：从源码运行（给 OCS 当后端 / 想改代码）
+**5.1 装 Python（必须官网 64 位，≥3.10）**
 
-#### 2.1 装 Git
-
-1. 打开 `https://git-scm.com/download/win`  
-2. 下载 64-bit 安装包，一路 Next 装完。  
-3. `Win+R` → `cmd` → 输入 `git --version`，能显示版本号即可。
-
-#### 2.2 装 Python（必须 3.10 以上，建议 3.12）
-
-1. 打开 `https://www.python.org/downloads/`  
-2. 下载 **Windows installer (64-bit)**。  
-3. 安装第一页 **务必勾选：Add python.exe to PATH**。  
-4. Install Now。  
-5. 新开 cmd：
+1. `https://www.python.org/downloads/` → **Windows installer (64-bit)**（建议 3.12）。  
+2. 第一页勾选 **Add python.exe to PATH**。  
+3. Install Now。  
+4. **新开** cmd：
 
 ```bat
 python --version
+python -c "import sys; print(sys.maxsize>2**32)"
 ```
 
-应显示 `Python 3.10` 或更高。若显示 3.9 或不是内部命令：重装并勾选 PATH。
+若弹出 Microsoft Store：说明不是正确安装；重装官网版，或暂时禁用 python 应用执行别名。
 
-#### 2.3 下载代码
+**5.2 拿到代码**
 
-```bat
-cd /d D:\
-git clone https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service.git
-cd ocsjs-ai-answer-service
-```
+- 简单：仓库页 **Code → Download ZIP** → 解压到 `D:\Tools\ocsjs-ai-answer-service`。  
+- 或装 Git 后 `git clone ...`。
 
-国内可：
+**5.3 装依赖**
 
 ```bat
-git clone https://gitee.com/qinxinwei123/ocsjs-ai-answer-service.git
-cd ocsjs-ai-answer-service
-```
-
-或不用 Git：在仓库页点 **Code → Download ZIP**，解压后用 cmd 进入该文件夹。
-
-#### 2.4 建「虚拟环境」并安装依赖
-
-虚拟环境可以理解成：给这个项目单独准备的小仓库，不污染系统 Python。
-
-```bat
-cd ocsjs-ai-answer-service
+cd /d D:\Tools\ocsjs-ai-answer-service
 python -m venv .venv
 .venv\Scripts\activate.bat
 python -m pip install -U pip
 pip install -r requirements.txt
 ```
 
-**常见问题：**
+慢：加 `-i https://pypi.tuna.tsinghua.edu.cn/simple`。  
+PowerShell 激活被拒：管理员执行 `Set-ExecutionPolicy -Scope Process RemoteSigned`，或一直用 `.venv\Scripts\python.exe`。
 
-| 现象 | 处理 |
-|------|------|
-| PowerShell 提示禁止运行脚本 | 管理员 PowerShell 执行：`Set-ExecutionPolicy -Scope Process RemoteSigned` 后再 `.venv\Scripts\Activate.ps1` |
-| 想不激活也能跑 | 一直用：`.venv\Scripts\python.exe` 代替 `python` |
-| `pip` 很慢 | 换国内源：`pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple` |
+**5.4 配置密钥**
 
-#### 2.5 配置 AI 密钥（二选一）
+1. 复制 `.env.example` 为 `.env`（文件名就是 `.env`）。  
+2. 记事本打开，填写 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL`。  
+3. 保持 `HOST=127.0.0.1`、`PORT=5000`。  
+4. 不要把 `.env` 传到网上。
 
-**方式 A：你已有 ccswitch**  
-通常不用改配置文件，直接下一步启动，服务会读 `C:\Users\你的用户名\.claude\settings.json`。
-
-**方式 B：手动配置（新手更常见）**
-
-1. 在项目文件夹里找到 `.env.example`。  
-2. **复制**一份，把新文件**重命名**为 `.env`（文件名就是 `.env`，没有别的前缀）。  
-3. 用 **记事本** 打开 `.env`，至少改成：
-
-```ini
-ANTHROPIC_API_KEY=把这里换成你的真实密钥
-ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-ANTHROPIC_MODEL=你的模型ID
-HOST=127.0.0.1
-PORT=5000
-DEBUG=False
-```
-
-4. **保存**。  
-5. 不要把写有真密钥的 `.env` 发给别人或上传到 GitHub。
-
-> Base URL / 模型名以你所用服务商文档为准。若不用 ccswitch，就要保证 Key、URL、模型三者匹配。
-
-#### 2.6 启动服务
-
-若刚才关了窗口，重新：
+**5.5 启动（Windows 用这个，不要用 gunicorn）**
 
 ```bat
-cd ocsjs-ai-answer-service
-.venv\Scripts\activate.bat
-python app.py
-```
-
-或直接：
-
-```bat
+cd /d D:\Tools\ocsjs-ai-answer-service
 .venv\Scripts\python.exe app.py
 ```
 
-**怎样算启动成功：**  
-黑窗口出现类似：
+或双击 `start.bat`。  
+窗口出现监听信息且不退出 = 成功。**不要关掉**这个窗口。
 
-```text
-配置来源: ccswitch
-AI 模型: xxx, Base URL: xxx
-```
+浏览器打开：`http://127.0.0.1:5000/` 和 `/api/health`。
 
-且没有立刻退出。保持这个窗口**不要关**（关了服务就停）。
+**5.6 接 OCS**
 
-#### 2.7 用浏览器检查
+复制 `ocs_config_example.json` 到 OCS 题库配置；地址保持 `http://localhost:5000/api/search`；服务窗口必须开着。
 
-新开 Edge，在地址栏分别打开：
+### 出错了怎么办（干净系统排错表）
 
-| 地址 | 你会看到 |
-|------|----------|
-| `http://127.0.0.1:5000/` | 问答测试首页 |
-| `http://127.0.0.1:5000/api/health` | 一串表示健康的 JSON 文字 |
-| `http://127.0.0.1:5000/dashboard` | 仪表盘 |
-| `http://127.0.0.1:5000/docs` | API 文档 |
+| 现象 | 最可能原因 | 怎么修 |
+|------|------------|--------|
+| ARM64 / 32 位系统 | 不支持 | 换 x64 机器 |
+| 双击无反应 | 缺 `_internal` / 在 ZIP 内运行 | 完整解压后再运行 |
+| SmartScreen | 未签名 | 更多信息 → 仍要运行 |
+| Program Files 里异常 | 无写权限 | 挪到 `D:\Tools` |
+| `python` 弹商店 | Store 假 python / 别名 | 官网 64 位重装；关应用执行别名 |
+| `python` 不是内部命令 | 未加 PATH | 重装勾选 Add to PATH |
+| `pip install` 报错 | 网络或 Python&lt;3.10 | 升级 Python；换国内源 |
+| 源码 `gunicorn` 无法运行 | **Windows 无原生 gunicorn 服务体验** | 改用 `python app.py` 或 `start.bat` |
+| 127.0.0.1:5000 拒绝连接 | 服务没启动/窗口已关/端口占用 | 先启动；查 5000 被谁占用 |
+| 首页开了但答不出 | Key/URL/模型不匹配或无额度 | 核对 `.env`；看 `/api/health` |
+| OCS 连不上 | 地址/端口/服务未开 | 与启动地址一致；保持服务窗口 |
+| 便携 GUI 开了但无答案 | 未填 Key 或网络失败 | 窗口里配置；查服务商控制台 |
+| Win10 异常 | **未实机验证边界** | 可尝试；不能算官方通过 |
 
-在首页输入一道题 → 点获取答案。看到答案 = 全链路成功。
-
-#### 2.8 健康检查脚本（可选）
-
-```bat
-.venv\Scripts\python.exe health_smoke.py --host 127.0.0.1 --port 5000
-```
-
-#### 2.9 接到 OCS 上
-
-1. 打开项目里的 `ocs_config_example.json`，整段复制。  
-2. 在 OCS 的题库/答题源配置里粘贴（以 OCS 界面实际位置为准）。  
-3. 确保 OCS 访问的地址与你启动的一致，默认：  
-   `http://localhost:5000/api/search`  
-4. 服务要开着，OCS 才能连上。
-
-#### 2.10 生产 / Docker（可选）
-
-```bat
-:: Gunicorn（Windows 上更常见是直接 python app.py；Linux 服务器用下面）
-gunicorn --config gunicorn.conf.py app:app
-
-:: Docker
-docker compose up -d
-```
-
-Docker 详见后文「生产部署」。ccswitch 若在宿主机 `127.0.0.1:15721`，容器里要用 `host.docker.internal`。
-
-#### 2.11 推到你自己的 GitHub（可选）
-
-```bat
-git remote add mine https://github.com/你的用户名/ocsjs-ai-answer-service.git
-git push -u mine main
-```
-
-#### 2.12 重新打 Windows 便携包（维护者）
-
-```powershell
-& .\build_windows.ps1
-```
-
-见 [packaging/BUILD_WINDOWS.md](packaging/BUILD_WINDOWS.md)。
-
----
-
-### 出错了怎么办（新手 FAQ）
-
-| 现象 | 可能原因 | 你可以这样做 |
-|------|----------|--------------|
-| 双击无反应/闪退 | 缺 `_internal` 或解压不完整 | 解压完整文件夹再运行 |
-| 提示已保护电脑 | 未签名 | 更多信息 → 仍要运行 |
-| `python` 不是内部命令 | 没装或没勾 PATH | 重装 Python 勾选 Add to PATH |
-| 打开网页 `127.0.0.1` 拒绝连接 | 服务没启动或窗口已关 | 先运行 `python app.py` 并保持窗口开着 |
-| 一直转圈/超时 | 网络、Base URL 错、密钥无效 | 检查 Key/URL/模型；看 cmd 窗口报错 |
-| 首页能开但答案失败 | AI 配置不对或余额问题 | 看 `/api/health` 的 `config_source`；到服务商控制台核对 |
-| OCS 连不上 | 地址不一致、服务已关、端口占用 | 确认 `http://127.0.0.1:5000/api/search`，关掉占用 5000 的程序 |
-| 提示安全策略 | PowerShell 禁止脚本 | `Set-ExecutionPolicy -Scope Process RemoteSigned` |
-| 仪表盘打不开且配了令牌 | 未带 token | 地址后加 `?token=你的令牌` |
-
-功能边界与验证记录见 [docs/functional-completion.md](docs/functional-completion.md)、[docs/portable-delivery-20260912.md](docs/portable-delivery-20260912.md)。
+边界与记录：[docs/portable-delivery-20260912.md](docs/portable-delivery-20260912.md)、[docs/functional-completion.md](docs/functional-completion.md)、[packaging/PORTABLE_README.txt](packaging/PORTABLE_README.txt)。
 
 ---
 ## 1. 克隆代码库（兼容旧说明）
