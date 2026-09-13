@@ -30,6 +30,8 @@ EduBrain 提供两类运行形态：
 
 核心能力：OCS 兼容搜索接口、ccswitch 热重载与模型名净化、线程安全缓存与全题型答案清洗、可选 ACCESS_TOKEN、Windows 便携 GUI 与合成自检。
 
+**电脑新手请直接往下看「新手教程：一步一步装好并用起来」**（按初中生电脑水平写，含下载便携包、装 Python、配 `.env` 密钥、启动服务、接 OCS、排错表）。
+
 ---
 
 ## 重要提示
@@ -80,202 +82,289 @@ EduBrain 提供两类运行形态：
 
 ---
 
-## 快速开始
+## 新手教程：一步一步装好并用起来
 
-当前运行时恢复、缓存与答案处理、页面认证的说明及验证边界见 [功能完整性记录](docs/functional-completion.md)。缺少可用 AI 配置时首页与健康接口仍可访问；配置重载失败会保留原运行时。首页可填写访问令牌，令牌通过请求体传递。
+> 按「电脑新手 / 初中生」写。只想尽快在网页上答题：优先 **路线一（便携版）**。  
+> 源码路线需要装 Python、下载代码、配置密钥，步骤多，但每一步都写清了。
 
-### 方式 A：Windows 便携包（推荐普通用户）
+### 先认识几个词
 
-1. 打开 [Releases](https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/latest)。
-2. 下载 `EduBrain-Windows-x64.zip` 与 `SHA256SUMS.txt`，校验 SHA256。
-3. 解压到可写目录，双击 `EduBrain.exe`（诊断用 `EduBrain-console.exe`）。
-4. 在原生窗口填写协议、服务地址、模型标识和 API Key，应用后提交问答。
-5. 关闭窗口会停止本地回环服务。数据默认在 EXE 旁 `data/`。完整说明见 `packaging/PORTABLE_README.txt`。
+| 词 | 白话解释 |
+|----|----------|
+| **浏览器** | 上网软件，Windows 自带 **Microsoft Edge** |
+| **ZIP** | 压缩包，需先解压 |
+| **解压** | 右键 → 全部解压缩，把文件夹拿出来 |
+| **双击** | 鼠标左键快速点两下 |
+| **GitHub** | 存源码和安装包的网站，地址见文首表格 |
+| **Release** | 作者打好的安装包，下 ZIP 即可 |
+| **API Key** | AI 服务商发给你的「钥匙」，类似密码，**不要发到网上** |
+| **端口 5000** | 本机服务门牌号。地址 `http://127.0.0.1:5000` 表示「我这台电脑的 5000 号门」 |
+| **Python** | 一种编程运行环境。便携版自带，源码运行才要自己装 |
+| **OCS** | 本服务对接的答题脚本项目，浏览器油猴脚本 |
 
-合成自检（不调用真实模型）：
+### 路线怎么选
 
-```powershell
-.\EduBrain.exe --self-test --self-test-output "D:\便携测试\gui.json"
-.\EduBrain-console.exe --self-test --self-test-output "D:\便携测试\console.json"
-```
+| 你想做什么 | 走哪条 |
+|------------|--------|
+| 本机双击就能用，界面填密钥问答 | **路线一：Windows 便携版（推荐）** |
+| 给 OCS 网页脚本当后端 / 想改代码 | **路线二：源码运行** |
+| 已有 Docker 的老手 | 路线二最后的 Docker 小节 |
 
-### 方式 B：克隆源码后本地启动（见下方部署指南）
-
-### 方式 C：Docker
-
-```powershell
-git clone https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service.git
-cd ocsjs-ai-answer-service
-copy .env.example .env
-docker compose up -d
-```
+**注意：** 不管哪条路线，真正让 AI「答题」都需要 **可用的 AI 服务**（DeepSeek / Anthropic 兼容 API，或你本机已有的 ccswitch）。没有密钥时，程序可能能打开，但问不出答案。
 
 ---
 
-## 从 GitHub 部署到本机并成功运行
+### 路线一：Windows 便携版（推荐新手）
 
-默认源码部署目标：本机 `http://127.0.0.1:5000`。
+#### 1.1 打开下载页
 
-### 第 0 步：准备工具
+1. 打开 **Microsoft Edge**。  
+2. 地址栏粘贴并回车：  
+   `https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/latest`  
+3. 页面标题类似 **EduBrain Windows x64 portable 2026-09-13**。
 
-| 工具 | 必需？ | 检查命令 |
-|------|:------:|----------|
-| Git | 是 | `git --version` |
-| Python 3.10+ 64 位 | 是（源码） | `python --version` |
-| pip | 是 | `python -m pip --version` |
-| Docker Desktop | 仅容器部署 | `docker --version` |
-| Node 18+ | 仅 `.cjs` 测试 | `node --version` |
-| ccswitch 或 API Key | 答题必需 | 见下一步 |
+#### 1.2 下载
 
-### 第 1 步：获取代码
+1. 在 **Assets** 里点 **`EduBrain-Windows-x64.zip`**。  
+2. （可选）再点 **`SHA256SUMS.txt`** 做校验，新手可跳过。  
+3. 按 `Ctrl+J` 看下载位置，通常是 **下载** 文件夹。
+
+#### 1.3 解压
+
+1. `Win+E` 打开文件资源管理器 → **下载**。  
+2. **右键** ZIP → **全部解压缩…**。  
+3. 建议解压到例如：`D:\EduBrain` 或桌面。  
+4. 等进度条结束。
+
+**新手必读：**
+
+- 必须进入**解压后的文件夹**再运行，**不要**在 ZIP 里双击 EXE。  
+- **不要**只拷 `EduBrain.exe`，要拷整个文件夹（必须带 `_internal`）。  
+- 不要放 `C:\Program Files`，要选你能写的目录。  
+- 数据会出现在 EXE 旁边的 `data` 文件夹（第一次可能还没有）。
+
+#### 1.4 打开程序
+
+1. 进入文件夹，找到：  
+   `EduBrain.exe` ← 日常使用  
+   `EduBrain-console.exe` ← 出问题排查时用  
+   `_internal\`  
+2. **双击 `EduBrain.exe`**。  
+3. 若提示「Windows 已保护你的电脑」：点 **更多信息** → **仍要运行**（未签名属正常）。  
+4. 出现原生窗口 = 打开成功。
+
+#### 1.5 在窗口里填配置并提问
+
+1. 按界面填写 **协议**（如 Anthropic）、**服务地址（Base URL）**、**模型名**、**API Key**。  
+   示例（以你自己的服务商说明为准）：  
+   - Base URL：`https://api.deepseek.com/anthropic`  
+   - 模型：服务商文档里的模型 ID  
+   - API Key：在服务商控制台创建，形如 `sk-...`  
+2. 点 **应用/保存**（以窗口按钮文案为准）。  
+3. 在输入框写题目 → **提交/获取答案**。  
+4. 关闭窗口会停止本机服务。等完全退出后再拔 U 盘（若放在 U 盘上）。
+
+**密钥安全：**
+
+- API Key 只在本机使用，不要发到群里、不要贴到公开仓库。  
+- 若窗口提供「加密保存」，换电脑要用同一密码才能解开。  
+- 默认不保存密钥；关了窗口可能要重填。
+
+#### 1.6 自检（可选，不调用真实 AI）
+
+在程序文件夹打开 PowerShell：
 
 ```powershell
-# GitHub（推荐）
-git clone https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service.git
-cd ocsjs-ai-answer-service
-
-# 或 Gitee
-# git clone https://gitee.com/qinxinwei123/ocsjs-ai-answer-service.git
+.\EduBrain.exe --self-test --self-test-output "D:\EduBrain-test\gui.json"
 ```
 
-### 第 2 步：创建虚拟环境并安装依赖
+结束后看 JSON 里是否成功。无控制台窗口的 `EduBrain.exe` 请看指定输出文件。
 
-```powershell
+---
+
+### 路线二：从源码运行（给 OCS 当后端 / 想改代码）
+
+#### 2.1 装 Git
+
+1. 打开 `https://git-scm.com/download/win`  
+2. 下载 64-bit 安装包，一路 Next 装完。  
+3. `Win+R` → `cmd` → 输入 `git --version`，能显示版本号即可。
+
+#### 2.2 装 Python（必须 3.10 以上，建议 3.12）
+
+1. 打开 `https://www.python.org/downloads/`  
+2. 下载 **Windows installer (64-bit)**。  
+3. 安装第一页 **务必勾选：Add python.exe to PATH**。  
+4. Install Now。  
+5. 新开 cmd：
+
+```bat
+python --version
+```
+
+应显示 `Python 3.10` 或更高。若显示 3.9 或不是内部命令：重装并勾选 PATH。
+
+#### 2.3 下载代码
+
+```bat
+cd /d D:\
+git clone https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service.git
+cd ocsjs-ai-answer-service
+```
+
+国内可：
+
+```bat
+git clone https://gitee.com/qinxinwei123/ocsjs-ai-answer-service.git
+cd ocsjs-ai-answer-service
+```
+
+或不用 Git：在仓库页点 **Code → Download ZIP**，解压后用 cmd 进入该文件夹。
+
+#### 2.4 建「虚拟环境」并安装依赖
+
+虚拟环境可以理解成：给这个项目单独准备的小仓库，不污染系统 Python。
+
+```bat
+cd ocsjs-ai-answer-service
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.venv\Scripts\activate.bat
 python -m pip install -U pip
 pip install -r requirements.txt
 ```
 
-Windows 若无法执行脚本：先 `Set-ExecutionPolicy -Scope Process RemoteSigned`，或改用 `.\.venv\Scripts\python.exe` 直接运行。
+**常见问题：**
 
-### 第 3 步：配置 AI（二选一）
+| 现象 | 处理 |
+|------|------|
+| PowerShell 提示禁止运行脚本 | 管理员 PowerShell 执行：`Set-ExecutionPolicy -Scope Process RemoteSigned` 后再 `.venv\Scripts\Activate.ps1` |
+| 想不激活也能跑 | 一直用：`.venv\Scripts\python.exe` 代替 `python` |
+| `pip` 很慢 | 换国内源：`pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple` |
 
-**方式一（推荐）：使用 ccswitch**
+#### 2.5 配置 AI 密钥（二选一）
 
-若本机已运行 ccswitch，服务会自动读取 `~/.claude/settings.json` 中的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`，通常无需再写 `.env`。
+**方式 A：你已有 ccswitch**  
+通常不用改配置文件，直接下一步启动，服务会读 `C:\Users\你的用户名\.claude\settings.json`。
 
-**方式二：手动 `.env`**
+**方式 B：手动配置（新手更常见）**
 
-```powershell
-copy .env.example .env
-# 编辑 .env，至少填写：
-# ANTHROPIC_API_KEY=your_api_key_here
-# ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-# ANTHROPIC_MODEL=deepseek-v4-pro
-```
-
-可选安全项：
+1. 在项目文件夹里找到 `.env.example`。  
+2. **复制**一份，把新文件**重命名**为 `.env`（文件名就是 `.env`，没有别的前缀）。  
+3. 用 **记事本** 打开 `.env`，至少改成：
 
 ```ini
-ACCESS_TOKEN=please_change_me
+ANTHROPIC_API_KEY=把这里换成你的真实密钥
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_MODEL=你的模型ID
 HOST=127.0.0.1
 PORT=5000
 DEBUG=False
 ```
 
-> 默认只监听 `127.0.0.1`。Docker 或局域网访问时显式设置 `HOST=0.0.0.0`。切勿提交真实 `.env`。
+4. **保存**。  
+5. 不要把写有真密钥的 `.env` 发给别人或上传到 GitHub。
 
-### 第 4 步：启动服务
+> Base URL / 模型名以你所用服务商文档为准。若不用 ccswitch，就要保证 Key、URL、模型三者匹配。
 
-```powershell
+#### 2.6 启动服务
+
+若刚才关了窗口，重新：
+
+```bat
+cd ocsjs-ai-answer-service
+.venv\Scripts\activate.bat
 python app.py
 ```
 
-预期日志类似：
+或直接：
+
+```bat
+.venv\Scripts\python.exe app.py
+```
+
+**怎样算启动成功：**  
+黑窗口出现类似：
 
 ```text
 配置来源: ccswitch
-AI 模型: deepseek-v4-pro, Base URL: http://127.0.0.1:15721
+AI 模型: xxx, Base URL: xxx
 ```
 
-浏览器打开：
+且没有立刻退出。保持这个窗口**不要关**（关了服务就停）。
 
-| 地址 | 用途 |
-|------|------|
+#### 2.7 用浏览器检查
+
+新开 Edge，在地址栏分别打开：
+
+| 地址 | 你会看到 |
+|------|----------|
 | `http://127.0.0.1:5000/` | 问答测试首页 |
-| `http://127.0.0.1:5000/dashboard` | 仪表盘（配置了令牌时用 `?token=`） |
+| `http://127.0.0.1:5000/api/health` | 一串表示健康的 JSON 文字 |
+| `http://127.0.0.1:5000/dashboard` | 仪表盘 |
 | `http://127.0.0.1:5000/docs` | API 文档 |
-| `http://127.0.0.1:5000/api/health` | 健康检查 |
 
-### 第 5 步：健康检查与冒烟
+在首页输入一道题 → 点获取答案。看到答案 = 全链路成功。
 
-```powershell
-python health_smoke.py --host 127.0.0.1 --port 5000 --json --output health_smoke.json
+#### 2.8 健康检查脚本（可选）
+
+```bat
+.venv\Scripts\python.exe health_smoke.py --host 127.0.0.1 --port 5000
 ```
 
-退出码 `0` 表示探测通过。配置了 `ACCESS_TOKEN` 时可加 `--check-protected` 验证匿名降级。
+#### 2.9 接到 OCS 上
 
-### 第 6 步：在 OCS 中接入
+1. 打开项目里的 `ocs_config_example.json`，整段复制。  
+2. 在 OCS 的题库/答题源配置里粘贴（以 OCS 界面实际位置为准）。  
+3. 确保 OCS 访问的地址与你启动的一致，默认：  
+   `http://localhost:5000/api/search`  
+4. 服务要开着，OCS 才能连上。
 
-仓库示例见 `ocs_config_example.json`：
+#### 2.10 生产 / Docker（可选）
 
-```json
-[
-  {
-    "name": "AI智能题库",
-    "url": "http://localhost:5000/api/search",
-    "method": "get",
-    "type": "GM_xmlhttpRequest",
-    "contentType": "json",
-    "data": {
-      "title": "${title}",
-      "type": "${type}",
-      "options": "${options}"
-    },
-    "handler": "return (res)=> res.code === 1 ? [res.question, res.answer] : [res.msg, undefined]"
-  }
-]
-```
-
-配置了 `ACCESS_TOKEN` 时，在请求头或 URL 中带上 `token`。
-
-### 第 7 步：生产启动（可选）
-
-```powershell
-# 使用仓库自带 gunicorn 配置（单进程 gthread，保留内存缓存一致性）
+```bat
+:: Gunicorn（Windows 上更常见是直接 python app.py；Linux 服务器用下面）
 gunicorn --config gunicorn.conf.py app:app
 
-# Docker
-docker build -t ai-answer-service .
-docker run -p 5000:5000 --env-file .env ai-answer-service
-
-# Docker Compose
+:: Docker
 docker compose up -d
 ```
 
-> 若 ccswitch 只监听 `127.0.0.1:15721`，容器内应把 `ANTHROPIC_BASE_URL` 配成 `http://host.docker.internal:15721/...`（compose 已配置 `host.docker.internal`）。
+Docker 详见后文「生产部署」。ccswitch 若在宿主机 `127.0.0.1:15721`，容器里要用 `host.docker.internal`。
 
-### 第 8 步：推送到你自己的 GitHub 仓库（可选）
+#### 2.11 推到你自己的 GitHub（可选）
 
-```powershell
-git remote add mine https://github.com/<你的用户名>/ocsjs-ai-answer-service.git
+```bat
+git remote add mine https://github.com/你的用户名/ocsjs-ai-answer-service.git
 git push -u mine main
 ```
 
-### 第 9 步：构建 Windows 便携包（可选，维护者）
-
-在项目构建 venv 与门禁齐全的前提下：
+#### 2.12 重新打 Windows 便携包（维护者）
 
 ```powershell
 & .\build_windows.ps1
 ```
 
-细节见 [packaging/BUILD_WINDOWS.md](packaging/BUILD_WINDOWS.md)。产物为 `dist/EduBrain-Windows-x64-<时间戳>/` 下的文件夹、ZIP 与校验和。
-
-### 第 10 步：跑回归测试（可选）
-
-```powershell
-& .\.build\venv\Scripts\python.exe test_portable_foundation.py -v
-& .\.build\venv\Scripts\python.exe test_app_safety.py -v
-& .\.build\venv\Scripts\python.exe tests\test_security_and_config.py -v
-& .\.build\venv\Scripts\python.exe packaging\test_snapshot_integrity.py -v
-```
-
-请勿提交或打印 `.env` / 真实密钥。
+见 [packaging/BUILD_WINDOWS.md](packaging/BUILD_WINDOWS.md)。
 
 ---
 
+### 出错了怎么办（新手 FAQ）
+
+| 现象 | 可能原因 | 你可以这样做 |
+|------|----------|--------------|
+| 双击无反应/闪退 | 缺 `_internal` 或解压不完整 | 解压完整文件夹再运行 |
+| 提示已保护电脑 | 未签名 | 更多信息 → 仍要运行 |
+| `python` 不是内部命令 | 没装或没勾 PATH | 重装 Python 勾选 Add to PATH |
+| 打开网页 `127.0.0.1` 拒绝连接 | 服务没启动或窗口已关 | 先运行 `python app.py` 并保持窗口开着 |
+| 一直转圈/超时 | 网络、Base URL 错、密钥无效 | 检查 Key/URL/模型；看 cmd 窗口报错 |
+| 首页能开但答案失败 | AI 配置不对或余额问题 | 看 `/api/health` 的 `config_source`；到服务商控制台核对 |
+| OCS 连不上 | 地址不一致、服务已关、端口占用 | 确认 `http://127.0.0.1:5000/api/search`，关掉占用 5000 的程序 |
+| 提示安全策略 | PowerShell 禁止脚本 | `Set-ExecutionPolicy -Scope Process RemoteSigned` |
+| 仪表盘打不开且配了令牌 | 未带 token | 地址后加 `?token=你的令牌` |
+
+功能边界与验证记录见 [docs/functional-completion.md](docs/functional-completion.md)、[docs/portable-delivery-20260912.md](docs/portable-delivery-20260912.md)。
+
+---
 ## 1. 克隆代码库（兼容旧说明）
 
 ```bash
