@@ -30,7 +30,7 @@ EduBrain 提供两类运行形态：
 
 核心能力：OCS 兼容搜索接口、ccswitch 热重载与模型名净化、线程安全缓存与全题型答案清洗、可选 ACCESS_TOKEN、Windows 便携 GUI 与合成自检。
 
-**电脑新手请直接往下看「新手教程：一步一步装好并用起来」**（按初中生电脑水平写，含下载便携包、装 Python、配 `.env` 密钥、启动服务、接 OCS、排错表）。
+**电脑新手**请看「新手教程」；**会终端、嫌啰嗦**请看「快速教程（大学生版）」。
 
 ---
 
@@ -82,6 +82,68 @@ EduBrain 提供两类运行形态：
 
 ---
 
+
+## 选你的教程
+
+| 你是谁 | 看哪一段 |
+|--------|----------|
+| 电脑新手（约初中水平），要一步一步点鼠标 | 下一节 **新手教程** |
+| 会用终端的大学生 / 嫌上面啰嗦 | 下面 **快速教程（大学生版）** |
+## 快速教程（大学生版）
+
+> 假设你会：venv、pip、改 `.env`、起本地 HTTP。排错与截图级步骤见后文新手教程。
+
+### 三选一
+
+| 场景 | 做法 |
+|------|------|
+| 本机 GUI 最快 | Release 下 `EduBrain-Windows-x64.zip` → 解压 → `EduBrain.exe` |
+| 本地 API / 对接 OCS | 源码 + venv + `.env` + `python app.py` |
+| 容器 | `docker compose up -d` |
+
+### 便携包
+
+```powershell
+# https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/latest
+Expand-Archive .\EduBrain-Windows-x64.zip -DestinationPath D:\EduBrain
+D:\EduBrain\EduBrain\EduBrain.exe
+# 诊断入口
+D:\EduBrain\EduBrain\EduBrain-console.exe
+```
+
+### 源码（Python ≥3.10，建议 3.12）
+
+```powershell
+git clone https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service.git
+cd ocsjs-ai-answer-service
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1   # CMD: .venv\Scripts\activate.bat
+pip install -r requirements.txt
+# 有 ccswitch 可跳过 .env；否则：
+Copy-Item .env.example .env
+# 编辑 .env：ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / ANTHROPIC_MODEL；默认 HOST=127.0.0.1 PORT=5000
+python app.py
+# 浏览器: http://127.0.0.1:5000/  /api/health  /dashboard  /docs
+python health_smoke.py --host 127.0.0.1 --port 5000
+```
+
+生产：`gunicorn --config gunicorn.conf.py app:app`。容器里访问宿主机 ccswitch 用 `http://host.docker.internal:15721/...`。
+
+### OCS
+
+`POST/GET http://127.0.0.1:5000/api/search`，字段别名兼容 `title`/`options`/`type`；示例见 `ocs_config_example.json`。配置 `ACCESS_TOKEN` 时带 `X-Access-Token` 或 `?token=`。
+
+### 环境摘要
+
+| 路径 | 依赖 |
+|------|------|
+| 便携包 | Win10/11 x64，无本机 Python/Docker |
+| 源码 | Python 3.10+，`requirements.txt`（Flask/anthropic/gunicorn/waitress…） |
+| 可选 | ccswitch 或 API Key；Docker；Node 仅 `.cjs` 测试 |
+
+**安全：** 勿提交 `.env`；默认只听回环；生产/局域网才 `HOST=0.0.0.0`。
+
+---
 ## 新手教程：一步一步装好并用起来
 
 > 按「电脑新手 / 初中生」写。只想尽快在网页上答题：优先 **路线一（便携版）**。  
