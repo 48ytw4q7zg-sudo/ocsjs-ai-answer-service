@@ -9,24 +9,33 @@ import time
 import threading
 import hashlib
 import json
+import logging
 import math
+import os
 import re
+import sqlite3
 from collections import Counter, OrderedDict, deque
 from collections.abc import Mapping
 from typing import Dict, Any, Optional
 
+_logger = logging.getLogger(__name__)
+
 
 class SimpleCache:
-    """线程安全的内存缓存：空闲 TTL 过期 + O(1) LRU 淘汰 + 命中率统计。
+    """线程安全的答案缓存：空闲 TTL 过期 + O(1) LRU 淘汰 + 命中率统计。
 
-    缓存只在内存中；重载配置/切换模型会重建运行时并换用新缓存，因此键中不需要模型名。
+    namespace（协议|模型|提示词版本）写进缓存键：换模型或升级提示词后，旧答案不会被命中。
+    store 是可选的磁盘持久层（PersistentAnswerStore）；不设置时只在内存中。
     """
 
-    def __init__(self, expiration_seconds: int = 86400, max_size: int = 10000):
+    def __init__(self, expiration_seconds: int = 86400, max_size: int = 10000,
+                 namespace: str = "", store: "Optional[PersistentAnswerStore]" = None):
         # key -> (最近访问时间, 答案, 写入时间)；OrderedDict 顺序即 LRU 顺序。
         self.cache: "OrderedDict[str, tuple[float, str, float]]" = OrderedDict()
         self.expiration = max(0.0, float(expiration_seconds))
         self.max_size = max(1, int(max_size))
+        self.namespace = str(namespace or "")
+        self.store = store
         self._lock = threading.RLock()
         self.hits = 0
         self.misses = 0
@@ -37,21 +46,30 @@ class SimpleCache:
             self.remove_expired()
             return len(self.cache)
 
-    @staticmethod
-    def _generate_key(question: str, question_type: str, options: str) -> str:
-        content = json.dumps([question, question_type, options], ensure_ascii=False, separators=(',', ':'))
+    def _generate_key(self, question: str, question_type: str, options: str) -> str:
+        parts = [question, question_type, options]
+        if self.namespace:
+            parts.insert(0, self.namespace)
+        content = json.dumps(parts, ensure_ascii=False, separators=(',', ':'))
         return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
     def get_with_age(self, question: str, question_type: str = "",
                      options: str = "") -> Optional[tuple[str, float]]:
-        """返回 (答案, 距首次写入的秒数)；未命中返回 None。"""
+        """返回 (答案, 距首次写入的秒数)；未命中返回 None。内存未命中时再查磁盘层。"""
         key = self._generate_key(question, question_type, options)
         with self._lock:
             entry = self.cache.get(key)
             now = time.time()
-            if entry is None or self.expiration <= 0 or now - entry[0] >= self.expiration:
-                if entry is not None:
-                    del self.cache[key]
+            if entry is not None and (self.expiration <= 0 or now - entry[0] >= self.expiration):
+                del self.cache[key]
+                entry = None
+            if entry is None and self.store is not None and self.expiration > 0:
+                stored = self.store.get(key, now, self.expiration)
+                if stored is not None:
+                    while len(self.cache) >= self.max_size:
+                        self._evict_one()
+                    entry = (now, stored[0], stored[1])
+            if entry is None:
                 self.misses += 1
                 return None
             _, value, created = entry
@@ -74,17 +92,22 @@ class SimpleCache:
                 return
             now = time.time()
             if key in self.cache:
-                self.cache[key] = (now, answer, self.cache[key][2])
+                created = self.cache[key][2]
                 self.cache.move_to_end(key)
-                return
-            while len(self.cache) >= self.max_size:
-                self._evict_one()
-            self.cache[key] = (now, answer, now)
+            else:
+                while len(self.cache) >= self.max_size:
+                    self._evict_one()
+                created = now
+            self.cache[key] = (now, answer, created)
+            if self.store is not None:
+                self.store.put(key, answer, created, now, self.expiration, self.max_size)
 
     def clear(self) -> int:
         with self._lock:
             count = len(self.cache)
             self.cache.clear()
+            if self.store is not None:
+                count = max(count, self.store.clear())
             return count
 
     def remove_expired(self) -> int:
@@ -111,7 +134,87 @@ class SimpleCache:
                 'size': len(self.cache), 'max_size': self.max_size,
                 'hits': self.hits, 'misses': self.misses, 'evictions': self.evictions,
                 'hit_rate': round(self.hits / lookups, 4) if lookups else None,
+                'persisted': self.store.count() if self.store is not None else None,
             }
+
+
+class PersistentAnswerStore:
+    """可选的答案磁盘缓存（SQLite）：只存题目哈希键、答案和时间戳，不存题目原文。
+
+    任何磁盘/数据库错误都只记一次日志并降级为纯内存缓存，不影响答题。
+    """
+
+    def __init__(self, path) -> None:
+        self.path = str(path)
+        self.available = True
+        self._lock = threading.Lock()
+        self._writes = 0
+        self._connection = None
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+            self._connection = sqlite3.connect(self.path, timeout=5, check_same_thread=False, isolation_level=None)
+            self._connection.execute(
+                "CREATE TABLE IF NOT EXISTS answers (key TEXT PRIMARY KEY, answer TEXT NOT NULL, "
+                "created REAL NOT NULL, accessed REAL NOT NULL)")
+        except (sqlite3.Error, OSError) as exc:
+            self._disable(exc)
+
+    def _disable(self, exc) -> None:
+        self.available = False
+        _logger.warning("答案磁盘缓存不可用，已改为仅内存缓存: %s", type(exc).__name__)
+        if self._connection is not None:
+            try:
+                self._connection.close()
+            except sqlite3.Error:
+                pass
+            self._connection = None
+
+    def _run(self, operation, default=None):
+        with self._lock:
+            if not self.available:
+                return default
+            try:
+                return operation(self._connection)
+            except sqlite3.Error as exc:
+                self._disable(exc)
+                return default
+
+    def get(self, key: str, now: float, expiration: float) -> Optional[tuple[str, float]]:
+        def operation(db):
+            row = db.execute("SELECT answer, created, accessed FROM answers WHERE key = ?", (key,)).fetchone()
+            if row is None:
+                return None
+            if now - row[2] >= expiration:
+                db.execute("DELETE FROM answers WHERE key = ?", (key,))
+                return None
+            db.execute("UPDATE answers SET accessed = ? WHERE key = ?", (now, key))
+            return row[0], row[1]
+        return self._run(operation)
+
+    def put(self, key: str, answer: str, created: float, now: float, expiration: float, max_rows: int) -> None:
+        def operation(db):
+            db.execute("INSERT OR REPLACE INTO answers (key, answer, created, accessed) VALUES (?, ?, ?, ?)",
+                       (key, answer, created, now))
+            self._writes += 1
+            if self._writes % 100 == 1:
+                # 顺带清理过期记录，并把总量控制在上限内（按最近访问保留）。
+                db.execute("DELETE FROM answers WHERE accessed <= ?", (now - expiration,))
+                db.execute("DELETE FROM answers WHERE key IN "
+                           "(SELECT key FROM answers ORDER BY accessed DESC LIMIT -1 OFFSET ?)", (int(max_rows),))
+        self._run(operation)
+
+    def clear(self) -> int:
+        return self._run(lambda db: db.execute("DELETE FROM answers").rowcount, 0)
+
+    def count(self) -> int:
+        return self._run(lambda db: db.execute("SELECT COUNT(*) FROM answers").fetchone()[0], 0)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._connection is not None:
+                self._connection.close()
+                self._connection = None
+            self.available = False
 
 
 class PromptText(str):

@@ -7,9 +7,12 @@ import json
 import logging
 import math
 import os
+import random
 import re
+import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,9 +32,10 @@ import healthcheck
 import portable_controller
 import provider_clients
 import source_launcher
-from portable_settings import PreferenceError, Preferences
+from portable_settings import PreferenceError, Preferences, ProfileStore
 from provider_clients import OpenAICompatibleClient
 from utils import (
+    PersistentAnswerStore,
     PromptText,
     RateLimiter,
     ServiceMetrics,
@@ -331,6 +335,57 @@ class ServiceHardeningTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.get_json()['error_code'], 'upstream_invalid_response')
 
+    def test_legacy_token_locations_can_be_disabled(self):
+        service.Config.ACCESS_TOKEN = 'synthetic-token'
+        service._legacy_token_warned.clear()
+        before = service.metrics.counters['legacy_token_location']
+        with self.assertLogs(service.logger, 'WARNING') as logs:
+            self.assertEqual(self.http.get('/api/stats?token=synthetic-token').status_code, 200)
+            self.assertEqual(self.http.get('/api/stats?token=synthetic-token').status_code, 200)
+        self.assertEqual(service.metrics.counters['legacy_token_location'] - before, 2)
+        self.assertEqual(sum('旧写法' in line for line in logs.output), 1, 'warn once, count every use')
+        service.Config.ALLOW_LEGACY_TOKEN_LOCATIONS = False
+        denied = self.http.get('/api/stats?token=synthetic-token')
+        self.assertEqual(denied.status_code, 403)
+        self.assertIn('X-Access-Token', denied.get_json()['message'])
+        self.assertEqual(self.http.post('/api/search', json={'title': 'q', 'token': 'synthetic-token'}).status_code, 403)
+        self.assertEqual(self.http.get('/api/stats', headers={'X-Access-Token': 'synthetic-token'}).status_code, 200)
+
+    def test_error_code_is_mirrored_in_response_header(self):
+        missing = self.http.post('/api/search', json={})
+        self.assertEqual(missing.headers['X-Error-Code'], 'missing_question')
+        with patch.object(service, '_call_ai', return_value='answer'):
+            ok = self.http.post('/api/search', json={'title': 'header ok'})
+        self.assertNotIn('X-Error-Code', ok.headers)
+
+    def test_runtime_cache_uses_model_namespace_and_configured_store(self):
+        with tempfile.TemporaryDirectory() as folder:
+            service.Config.CACHE_PERSIST_FILE = str(Path(folder) / 'cache.sqlite3')
+            try:
+                with patch.object(service, 'build_ai_client', return_value=RecordingClient()):
+                    service._runtime_initialize()
+                self.assertIn(service.Config.ANTHROPIC_MODEL, service.cache.namespace)
+                self.assertIn(service.PROMPT_VERSION, service.cache.namespace)
+                self.assertIsNotNone(service.cache.store)
+            finally:
+                for store in service._answer_stores.values():
+                    store.close()
+                service._answer_stores.clear()
+
+    def test_dependency_version_warnings(self):
+        self.assertEqual(service.dependency_version_warnings(), [])
+        with patch.object(anthropic, '__version__', '2.0.0'):
+            warnings = service.dependency_version_warnings()
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('anthropic 2.0.0', warnings[0])
+
+    def test_token_comparison_uses_constant_time_digest(self):
+        with patch.object(service.hmac, 'compare_digest', wraps=service.hmac.compare_digest) as spy:
+            self.assertTrue(service._token_matches('synthetic', 'synthetic'))
+            self.assertFalse(service._token_matches('synthetic-other', 'synthetic'))
+        self.assertEqual(spy.call_count, 2)
+        self.assertTrue(all(len(args[0]) == len(args[1]) == 32 for args, _kwargs in spy.call_args_list))
+
     def test_reload_waits_for_in_flight_call_before_closing_old_client(self):
         entered, release, closed = threading.Event(), threading.Event(), []
 
@@ -457,6 +512,53 @@ class ConfigurationHelpersTests(unittest.TestCase):
         with patch.object(config.Config, 'DEBUG', True), patch.object(config.Config, 'HOST', '0.0.0.0'):
             self.assertTrue(service.debug_bind_is_unsafe())
 
+    def test_server_and_portable_share_setting_limits_and_url_rules(self):
+        self.assertEqual(provider_clients.SETTING_LIMITS['max_tokens'], (1, 131072))
+        Preferences(max_tokens=131072).validate()
+        with self.assertRaises(PreferenceError):
+            Preferences(max_tokens=131073).validate()
+        with patch.dict(os.environ, {'MAX_TOKENS': '131072'}):
+            self.assertEqual(config._env_int('MAX_TOKENS', 500, *provider_clients.SETTING_LIMITS['max_tokens']), 131072)
+        for url in ('https://user:secret@api.example.com/v1', 'https://api.example.com/v1?key=1', 'api.example.com'):
+            with self.subTest(url=url):
+                self.assertIsNotNone(provider_clients.base_url_problem(url))
+                with self.assertRaises(PreferenceError):
+                    Preferences(base_url=url).validate()
+        self.assertIsNone(provider_clients.base_url_problem('https://api.example.com/v1'))
+
+    def test_portable_cache_persist_preference_maps_to_data_folder(self):
+        self.assertTrue(Preferences.from_mapping({'cache_persist': True}).cache_persist)
+        self.assertFalse(Preferences.from_mapping({}).cache_persist)
+        with self.assertRaises(PreferenceError):
+            Preferences(cache_persist='yes').validate()
+        fake = SimpleNamespace(config=SimpleNamespace())
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(portable_controller.portable_paths, 'data_root', return_value=Path(folder)):
+            portable_controller.PortableController._set_config(fake, Preferences(cache_persist=True), '', 'token')
+            self.assertEqual(fake.config.CACHE_PERSIST_FILE, str(Path(folder) / 'answer-cache.sqlite3'))
+            portable_controller.PortableController._set_config(fake, Preferences(), '', 'token')
+            self.assertEqual(fake.config.CACHE_PERSIST_FILE, '')
+
+    def test_profile_backup_recovers_and_never_keeps_deleted_credentials(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = ProfileStore(Path(folder) / 'profile.json')
+            store.save(Preferences(model='first-model'), credentials={'api_key': 'SYNTHETIC-KEY'},
+                       password='synthetic-password')
+            store.save(Preferences(model='second-model'), credentials={'api_key': 'SYNTHETIC-KEY-2'},
+                       password='synthetic-password')
+            backup = json.loads(store.backup_path.read_text(encoding='utf-8'))
+            self.assertEqual(backup['preferences']['model'], 'first-model')
+            self.assertIn('encrypted_credentials', backup)
+            store.path.write_text('{broken', encoding='utf-8')
+            reopened = ProfileStore(store.path)
+            self.assertEqual(reopened.load_preferences().model, 'first-model')
+            self.assertTrue(reopened.recovered_from_backup)
+            self.assertEqual(reopened.unlock('synthetic-password')['api_key'], 'SYNTHETIC-KEY')
+            reopened.save(Preferences(model='third-model'))
+            self.assertNotIn('encrypted_credentials', json.loads(store.backup_path.read_text(encoding='utf-8')))
+            self.assertFalse(reopened.recovered_from_backup)
+            self.assertEqual(ProfileStore(store.path).load_preferences().model, 'third-model')
+
     def test_healthcheck_ready_mode(self):
         class Response:
             def __init__(self, body):
@@ -551,6 +653,92 @@ class UtilityTests(unittest.TestCase):
         self.assertEqual(snapshot['retry_rate'], 0.25)
         self.assertEqual(snapshot['latency_ms']['p50'], 300.0)
         self.assertEqual(snapshot['latency_ms']['max'], 1000.0)
+
+    def test_cache_namespace_and_optional_disk_store(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'answers.sqlite3'
+            store = PersistentAnswerStore(path)
+            try:
+                first = SimpleCache(60, namespace='anthropic|model-a|v1', store=store)
+                first.set('secret question text', 'A', 'single', 'A. 1')
+                restarted = SimpleCache(60, namespace='anthropic|model-a|v1', store=store)
+                self.assertEqual(restarted.get_with_age('secret question text', 'single', 'A. 1')[0], 'A')
+                self.assertEqual(restarted.stats()['persisted'], 1)
+                other_model = SimpleCache(60, namespace='anthropic|model-b|v1', store=store)
+                self.assertIsNone(other_model.get('secret question text', 'single', 'A. 1'))
+                raw = sqlite3.connect(path)
+                try:
+                    rows = raw.execute('SELECT key, answer FROM answers').fetchall()
+                finally:
+                    raw.close()
+                self.assertFalse(any('secret question text' in value for row in rows for value in row))
+                with patch('utils.time.time', return_value=time.time() + 120):
+                    expired = SimpleCache(60, namespace='anthropic|model-a|v1', store=store)
+                    self.assertIsNone(expired.get('secret question text', 'single', 'A. 1'))
+                first.set('another question', 'B')
+                self.assertGreaterEqual(first.clear(), 1)
+                self.assertEqual(store.count(), 0)
+            finally:
+                store.close()
+            broken_path = Path(folder) / 'broken.sqlite3'
+            broken_path.write_bytes(b'not a database file' * 64)
+            with self.assertLogs('utils', 'WARNING'):
+                broken = PersistentAnswerStore(broken_path)
+            self.assertFalse(broken.available)
+            degraded = SimpleCache(60, store=broken)
+            degraded.set('q', 'A')
+            self.assertEqual(degraded.get('q'), 'A')
+
+    def test_cache_is_consistent_under_concurrent_access(self):
+        cache = SimpleCache(60, max_size=50)
+        errors, lookups, lock = [], [0], threading.Lock()
+
+        def worker(seed):
+            rng = random.Random(seed)
+            try:
+                for _ in range(400):
+                    key = f'q{rng.randrange(80)}'
+                    if rng.random() < 0.5:
+                        cache.set(key, key.upper())
+                        continue
+                    value = cache.get(key)
+                    with lock:
+                        lookups[0] += 1
+                    if value is not None and value != key.upper():
+                        errors.append((key, value))
+            except Exception as exc:  # pragma: no cover - reported through the assertion below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(seed,)) for seed in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+        self.assertEqual(errors, [])
+        stats = cache.stats()
+        self.assertLessEqual(stats['size'], 50)
+        self.assertEqual(stats['hits'] + stats['misses'], lookups[0])
+
+    def test_randomized_option_normalization_and_letter_mapping(self):
+        rng = random.Random(20260926)
+        alphabet = ['甲', '乙', 'x', 'y', '<p>', '&lt;', ' ', '\t', '。', '1', '>']
+        for _ in range(300):
+            count = rng.randint(1, 8)
+            texts = []
+            for index in range(count):
+                text = ''.join(rng.choice(alphabet) for _ in range(rng.randint(1, 6))).strip()
+                texts.append(f'{text}{index}' if text else f'选项{index}')
+            lines = []
+            for index, text in enumerate(texts):
+                lines.append(f'{chr(65 + index)}. {text}')
+                if rng.random() < 0.3:
+                    lines.append('  续行说明')
+            raw = rng.choice(['\n', '\r\n', '\r']).join(lines) + rng.choice(['', '\n\n', '  \n'])
+            normalized = normalize_options(raw)
+            self.assertEqual(normalize_options(normalized), normalized)
+            self.assertEqual(count_options(normalized), count)
+            letter = rng.randrange(count)
+            self.assertEqual(extract_answer(chr(65 + letter), 'single', normalized), texts[letter])
 
     def test_extraction_trace_reports_path(self):
         trace = []

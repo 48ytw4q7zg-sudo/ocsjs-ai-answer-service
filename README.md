@@ -63,6 +63,11 @@ EduBrain 提供两类运行形态：
 | 新接口 | — | `/api/ready`（就绪探针）、`/openapi.json`（OpenAPI 3 契约）；`/api/stats` 增加 `metrics`（QPS、延迟分位、缓存命中率、失败/重试率）与 `cache` 统计 | 无 |
 | 配置热重载 | `settings.json` 正在写入时会误回退到 `.env` | 文件暂不可读时重读一次，仍失败则保留当前配置并返回失败 | 无 |
 | DEBUG | 可与 `HOST=0.0.0.0` 同时启用 | `python app.py`/`start.bat` 拒绝在非回环地址开启 DEBUG | 无 |
+| 令牌写在网址/请求体 | 默认兼容 | 仍默认兼容；每次使用计入 `legacy_token_location` 指标并告警一次；`ALLOW_LEGACY_TOKEN_LOCATIONS=false` 后只接受请求头 | OCS 配置改用 `headers` 后可关闭 |
+| 错误类型 | 只在响应体 `error_code` | 响应头 `X-Error-Code` 同步给出，网关/监控不解析响应体也能按错误类型统计 | 无 |
+| 答案缓存 | 仅内存，键不含模型 | 缓存键包含“协议/模型/提示词版本”，换模型或升级提示词不会命中旧答案；可选 `CACHE_PERSIST_FILE`（便携版勾选“缓存保存到 data 文件夹”）写入 SQLite，只存题目哈希与答案、不存题目原文，磁盘出错自动退回内存 | 需要跨重启复用答案时开启 |
+| 依赖版本 | 只有版本范围 | `requirements-lock.txt` 记录已测试的具体版本；启动时 anthropic/httpx 超出已测试范围会告警 | 无 |
+| 便携配置文件 | 只有一份 | 每次保存把上一份留作 `profile.json.bak`（选择不保存密钥时备份里也删除），主文件损坏时自动改用备份并提示 | 无 |
 
 **超时预算（同一张表）**：单次上游请求 ≤ `API_TIMEOUT`（默认 30 秒），SDK 自身再重试 `API_MAX_RETRIES` 次（默认 2），空答案/上游 5xx 时换简化提示词再试一轮；
 最坏耗时 = `API_TIMEOUT × (API_MAX_RETRIES + 1) × 2`（默认 180 秒）。gunicorn worker 超时 = 该值 + 120 秒；便携版窗口等待 = 该值 + 30 秒（且不少于 120 秒）；
@@ -73,12 +78,14 @@ EduBrain 提供两类运行形态：
 
 **使用范围与隐私**：本服务仅用于用户自有学习辅助，不鼓励、不支持任何考试作弊或违反课程平台规则的用法；
 答案由第三方模型生成，可能出错，请自行核对。题目在本机处理，只发送给你配置的模型服务；日志默认只记录题目长度、题型和哈希摘要，不写题目原文；
+开启 `CACHE_PERSIST_FILE`（或便携版“缓存保存到 data 文件夹”）时，答案会写入磁盘，但只存题目的哈希键，不存题目原文；
 仪表盘的问答记录只在内存中保留最近 100 条，重启即清空。模型调用费用由配置 API Key 的使用者自行承担。
 便携版**不读取**本机 `.env`、cc-switch 与系统代理；源码服务模式默认读取 `~/.claude/settings.json`（可用 `CCSWITCH_ENABLED=false` 关闭）。
 
 **发布前检查清单**：① 全部测试通过（见 AGENTS.md 与 `tests/test_hardening.py`）；② `portable_entry.py --self-test` 的 `passed=true`，并包含 4 项 `fault_*` 故障注入检查；
 ③ `packaging/verify_portable.py` 快照完整性通过；④ 便携版帮助文字“不读取本机 .env、cc-switch”与 `config.py` 中 `PORTABLE_MODE` 分支一致（`tests/test_hardening.py` 与自检 `host_environment_isolation` 覆盖）；
-⑤ 依赖安全：在联网环境执行 `pip install pip-audit && pip-audit -r requirements.txt`，需要可复现构建时用 `pip-compile` 生成锁文件（本次未执行，见交付说明）。
+⑤ 依赖安全：`requirements-lock.txt` 记录已测试的具体版本；在打包环境执行 `.build\venv\Scripts\python.exe packaging\export_runtime_lock.py --check-osv` 查询 OSV 公开漏洞库。
+2026-09-26 的结果：32 个运行依赖中只有 cryptography 49.0.0 命中 CVE-2026-69247（PKCS#7 EnvelopedData 解密），本项目只用 AES-GCM 与 scrypt，不调用受影响的函数；修复版 50.0.0 超出当前 `<50` 的版本范围，升级需放宽范围后复测并重新打包。
 
 ---
 
@@ -671,6 +678,7 @@ def reload_config() -> bool:
 | `ACCESS_TOKEN` | `ACCESS_TOKEN` | str\|None | `None` | 访问令牌（None=只允许本机回环地址调用） |
 | `ALLOW_REMOTE_WITHOUT_TOKEN` | `ALLOW_REMOTE_WITHOUT_TOKEN` | bool | `False` | 无令牌时是否允许非本机调用（高风险） |
 | `RATE_LIMIT_PER_MINUTE` | `RATE_LIMIT_PER_MINUTE` | int | `60` | 每客户端每分钟 AI 调用上限（缓存命中不计，0=不限） |
+| `ALLOW_LEGACY_TOKEN_LOCATIONS` | `ALLOW_LEGACY_TOKEN_LOCATIONS` | bool | `True` | 是否兼容把令牌放在网址/表单/JSON 请求体里；设为 false 后只接受请求头 |
 | `CCSWITCH_ENABLED` | `CCSWITCH_ENABLED` | bool | `True` | 服务模式是否读取 `~/.claude/settings.json`（便携版始终不读） |
 | `MAX_TOKENS` | `MAX_TOKENS` | int | `500` | AI 响应最大 token 数 |
 | `SHORT_ANSWER_MAX_TOKENS` | `SHORT_ANSWER_MAX_TOKENS` | int | `1024` | 简答题输出上限下限 |
@@ -678,6 +686,7 @@ def reload_config() -> bool:
 | `OBJECTIVE_TEMPERATURE_CAP` | `OBJECTIVE_TEMPERATURE_CAP` | float | `0.3` | 单选/多选/判断/填空温度上限 |
 | `ENABLE_CACHE` | `ENABLE_CACHE` | bool | `True` | 是否启用缓存 |
 | `CACHE_EXPIRATION` | `CACHE_EXPIRATION` | int | `86400` | 缓存过期秒数（默认 24h） |
+| `CACHE_PERSIST_FILE` | `CACHE_PERSIST_FILE` | str | 空 | 设置后答案缓存同时写入该 SQLite 文件（只存题目哈希与答案），重启后仍可命中；空=仅内存 |
 | `MAX_QUESTION_LENGTH` | `MAX_QUESTION_LENGTH` | int | `2000` | 问题最大字符数 |
 | `MAX_OPTIONS` / `MAX_OPTIONS_LENGTH` | 同名 | int | `64` / `8000` | 选项个数（按 A./B. 标号计，无标号按行计）与总字符上限 |
 | `MAX_REQUEST_BYTES` | `MAX_REQUEST_BYTES` | int | `262144` | 请求体上限（超出返回 413） |

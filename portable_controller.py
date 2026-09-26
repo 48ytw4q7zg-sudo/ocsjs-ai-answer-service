@@ -66,6 +66,9 @@ class PortableController:
             "API_MAX_RETRIES": preferences.max_retries,
             "ENABLE_CACHE": preferences.cache_enabled,
             "CACHE_EXPIRATION": preferences.cache_expiration,
+            # 默认只在内存；勾选后答案写入 data 文件夹（不含题目原文），下次启动仍可命中。
+            "CACHE_PERSIST_FILE": (str(portable_paths.data_root() / "answer-cache.sqlite3")
+                                   if preferences.cache_persist else ""),
             "ACCESS_TOKEN": access_token,
             "HOST": "127.0.0.1",
             "PORT": preferences.port,

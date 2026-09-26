@@ -6,11 +6,12 @@ import math
 import os
 from pathlib import Path
 import tempfile
-from urllib.parse import urlsplit
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+
+from provider_clients import SETTING_LIMITS, base_url_problem
 
 _ASSOCIATED_DATA = b'EduBrain portable profile v1'
 _MAX_PROFILE_BYTES = 65536
@@ -19,7 +20,7 @@ FIELD_LABELS = {
     'protocol': '接口协议', 'base_url': '接口基础地址', 'model': '模型标识', 'port': '本地端口',
     'max_tokens': '输出上限', 'max_retries': '重试次数', 'cache_expiration': '缓存有效秒',
     'temperature': '温度', 'timeout': '单次超时秒', 'cache_enabled': '答案缓存开关',
-    'reasoning_effort': '推理强度',
+    'reasoning_effort': '推理强度', 'cache_persist': '缓存保存到磁盘',
 }
 
 
@@ -44,6 +45,7 @@ class Preferences:
     cache_enabled: bool = True
     cache_expiration: int = 86400
     reasoning_effort: str = 'auto'
+    cache_persist: bool = False
 
     @classmethod
     def from_mapping(cls, values):
@@ -57,30 +59,28 @@ class Preferences:
     def validate(self):
         if self.protocol not in ('anthropic', 'openai_chat', 'openai_responses'):
             raise PreferenceError('protocol', '请选择受支持的接口格式')
-        if not isinstance(self.base_url, str) or len(self.base_url) > 2048 or any(ord(c) < 32 for c in self.base_url):
-            raise PreferenceError('base_url', 'API 地址格式无效')
-        try:
-            url = urlsplit(self.base_url.strip())
-            valid_url = url.scheme in ('http', 'https') and bool(url.hostname) and not url.username and not url.password and not url.query and not url.fragment
-            url.port
-        except ValueError:
-            valid_url = False
-        if not valid_url:
-            raise PreferenceError('base_url', '请填写完整的 HTTP/HTTPS API 基础地址（含 http:// 或 https://），不要在地址中放入密钥或查询参数')
+        problem = base_url_problem(self.base_url)
+        if problem:
+            raise PreferenceError('base_url', problem)
         self.base_url = self.base_url.strip().rstrip('/')
         if not isinstance(self.model, str) or not self.model.strip() or len(self.model) > 200 or any(ord(c) < 32 for c in self.model):
             raise PreferenceError('model', '模型标识不能为空、不能超过 200 个字符，也不能包含控制字符')
         self.model = self.model.strip()
-        for name, lower, upper in (('port',0,65535),('max_tokens',1,131072),('max_retries',0,10),('cache_expiration',60,31536000)):
+        integer_limits = [('port', 0, 65535)] + [
+            (name, *SETTING_LIMITS[name]) for name in ('max_tokens', 'max_retries', 'cache_expiration')
+        ]
+        for name, lower, upper in integer_limits:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not lower <= value <= upper:
                 raise PreferenceError(name, f'{FIELD_LABELS[name]}（{name}）必须是 {lower}–{upper} 之间的整数')
-        for name, lower, upper in (('temperature',0,2),('timeout',1,600)):
+        for name, lower, upper in ((name, *SETTING_LIMITS[name]) for name in ('temperature', 'timeout')):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not lower <= value <= upper:
                 raise PreferenceError(name, f'{FIELD_LABELS[name]}（{name}）必须是 {lower}–{upper} 之间的数字')
         if not isinstance(self.cache_enabled, bool):
             raise PreferenceError('cache_enabled', '缓存开关必须为布尔值')
+        if not isinstance(self.cache_persist, bool):
+            raise PreferenceError('cache_persist', '缓存保存开关必须为布尔值')
         if self.reasoning_effort not in ('auto','low','medium','high','xhigh','max'):
             raise PreferenceError('reasoning_effort', '推理档位无效')
 
@@ -105,19 +105,67 @@ def write_json_atomic(path, payload):
 class ProfileStore:
     def __init__(self, path):
         self.path = Path(path)
+        # 主文件损坏、改用 profile.json.bak 读取时置位，界面据此提示用户重新保存一次。
+        self.recovered_from_backup = False
 
-    def _read(self):
-        if not self.path.exists():
-            return {'version': 1, 'preferences': {}}
-        if self.path.stat().st_size > _MAX_PROFILE_BYTES:
+    @property
+    def backup_path(self):
+        return self.path.with_name(self.path.name + '.bak')
+
+    @staticmethod
+    def _read_file(path):
+        if not path.exists():
+            return None
+        if path.stat().st_size > _MAX_PROFILE_BYTES:
             raise ValueError('配置文件过大')
         try:
-            value = json.loads(self.path.read_text(encoding='utf-8'))
+            value = json.loads(path.read_text(encoding='utf-8'))
         except (UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError('配置文件损坏') from exc
         if not isinstance(value, dict) or value.get('version') != 1:
             raise ValueError('不支持的配置文件版本')
         return value
+
+    def _read(self):
+        try:
+            value = self._read_file(self.path)
+        except ValueError:
+            try:
+                backup = self._read_file(self.backup_path)
+            except (ValueError, OSError):
+                backup = None
+            if backup is None:
+                raise
+            self.recovered_from_backup = True
+            return backup
+        return value if value is not None else {'version': 1, 'preferences': {}}
+
+    def _backup_previous(self, keep_credentials):
+        """覆盖前把上一份可读的配置留作 profile.json.bak。
+
+        本次不保存凭据（用户选择删除已保存的密钥）时，备份里的加密凭据也一并去掉，不留副本。
+        """
+        backup = self.backup_path
+        try:
+            previous = self._read_file(self.path)
+        except (ValueError, OSError):
+            previous = None
+        if previous is not None:
+            if not keep_credentials:
+                previous.pop('encrypted_credentials', None)
+            write_json_atomic(backup, previous)
+            return
+        if keep_credentials or not backup.exists():
+            return
+        try:
+            stale = self._read_file(backup)
+        except (ValueError, OSError):
+            stale = None
+        if stale is None:
+            backup.unlink(missing_ok=True)
+        elif 'encrypted_credentials' in stale:
+            stale.pop('encrypted_credentials')
+            write_json_atomic(backup, stale)
 
     def load_preferences(self):
         return Preferences.from_mapping(self._read().get('preferences', {}))
@@ -147,7 +195,9 @@ class ProfileStore:
                 'nonce': base64.b64encode(nonce).decode('ascii'),
                 'data': base64.b64encode(encrypted).decode('ascii'),
             }
+        self._backup_previous(keep_credentials=bool(credentials))
         write_json_atomic(self.path, result)
+        self.recovered_from_backup = False
 
     def unlock(self, password):
         encrypted = self._read().get('encrypted_credentials')

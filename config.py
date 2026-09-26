@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from ccswitch import CcswitchUnreadableError, get_ccswitch_config, reload_ccswitch_config
 from portable_paths import is_portable, data_root
+from provider_clients import SETTING_LIMITS, base_url_problem
 
 logger = logging.getLogger(__name__)
 
@@ -216,9 +217,17 @@ def reload_config() -> bool:
     Config.CCSWITCH_IS_PROXY = resolved["is_proxy"]
     Config.EXTRA_ENV = resolved["extra_env"]
     Config.API_PROTOCOL = 'anthropic' if resolved['source'] == 'ccswitch' else _env_str('AI_API_PROTOCOL', 'anthropic')
+    _warn_invalid_base_url(Config.ANTHROPIC_BASE_URL)
     _config_loaded_at = time.time()
     Config.CONFIG_LOADED_AT = _config_loaded_at
     return resolved["source"] == "ccswitch"
+
+
+def _warn_invalid_base_url(url):
+    # 与便携设置共用同一条地址规则；服务端只告警不拒绝启动，便于先打开仪表盘排查。
+    problem = base_url_problem(url)
+    if problem:
+        logger.warning("ANTHROPIC_BASE_URL 配置有误：%s", problem)
 
 
 class Config:
@@ -254,8 +263,8 @@ class Config:
         EXTRA_ENV = _env_api_cfg["extra_env"]
 
     # ---- AI 客户端配置 ----
-    API_TIMEOUT = _env_float("API_TIMEOUT", 30.0, min_value=1.0, max_value=600.0)
-    API_MAX_RETRIES = _env_int("API_MAX_RETRIES", 2, min_value=0, max_value=10)
+    API_TIMEOUT = _env_float("API_TIMEOUT", 30.0, *SETTING_LIMITS["timeout"])
+    API_MAX_RETRIES = _env_int("API_MAX_RETRIES", 2, *SETTING_LIMITS["max_retries"])
     API_PROTOCOL = 'anthropic' if _ccswitch else _env_str('AI_API_PROTOCOL', 'anthropic')
     REASONING_EFFORT = _env_str('AI_REASONING_EFFORT', 'auto')
 
@@ -270,18 +279,22 @@ class Config:
     # 每个客户端每分钟最多触发的 AI 调用次数（缓存命中不计）；0 表示不限。
     RATE_LIMIT_PER_MINUTE = _env_int("RATE_LIMIT_PER_MINUTE", 60, min_value=0, max_value=100000)
     CCSWITCH_ENABLED = _ccswitch_enabled()
+    # 兼容旧写法：允许把令牌放在网址（?token=）或请求体里；OCS 配置改用 headers 后建议设为 false。
+    ALLOW_LEGACY_TOKEN_LOCATIONS = _env_bool("ALLOW_LEGACY_TOKEN_LOCATIONS", True)
 
     # ---- AI 响应配置 ----
-    MAX_TOKENS = _env_int("MAX_TOKENS", 500, min_value=1, max_value=4096)
+    MAX_TOKENS = _env_int("MAX_TOKENS", 500, *SETTING_LIMITS["max_tokens"])
     # 简答题需要完整句子，输出上限至少取该值，避免被截断后整题失败。
     SHORT_ANSWER_MAX_TOKENS = _env_int("SHORT_ANSWER_MAX_TOKENS", 1024, min_value=1, max_value=8192)
-    TEMPERATURE = _env_float("TEMPERATURE", 0.7, min_value=0.0, max_value=2.0)
+    TEMPERATURE = _env_float("TEMPERATURE", 0.7, *SETTING_LIMITS["temperature"])
     # 单选/多选/判断/填空需要唯一解，温度不高于该上限；简答题沿用 TEMPERATURE。
     OBJECTIVE_TEMPERATURE_CAP = _env_float("OBJECTIVE_TEMPERATURE_CAP", 0.3, min_value=0.0, max_value=2.0)
 
     # ---- 缓存配置 ----
     ENABLE_CACHE = _env_bool("ENABLE_CACHE", True)
-    CACHE_EXPIRATION = _env_int("CACHE_EXPIRATION", 86400, min_value=60)
+    CACHE_EXPIRATION = _env_int("CACHE_EXPIRATION", 86400, *SETTING_LIMITS["cache_expiration"])
+    # 设置后答案缓存同时写入该 SQLite 文件（只存题目哈希键与答案，不存题目原文），重启后仍可命中。
+    CACHE_PERSIST_FILE = _env_str("CACHE_PERSIST_FILE", "")
 
     # ---- 输入验证 ----
     MAX_QUESTION_LENGTH = _env_int("MAX_QUESTION_LENGTH", 2000, min_value=20, max_value=10000)
@@ -292,3 +305,7 @@ class Config:
 
     # ---- 配置加载时间 ----
     CONFIG_LOADED_AT = _config_loaded_at
+
+
+if not PORTABLE_MODE:
+    _warn_invalid_base_url(Config.ANTHROPIC_BASE_URL)

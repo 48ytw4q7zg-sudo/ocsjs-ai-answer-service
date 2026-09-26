@@ -27,12 +27,12 @@ AI题库服务是一个基于 Anthropic 兼容协议（也支持 OpenAI Chat / R
 
 1. **`X-Access-Token: <token>` 请求头（推荐）**
 2. `Authorization: Bearer <token>`
-3. 兼容旧版：`?token=` / `?access_token=` 查询参数、表单字段或 JSON 字段 `token`（会进入代理日志/浏览器历史，不推荐）
+3. 兼容旧版：`?token=` / `?access_token=` 查询参数、表单字段或 JSON 字段 `token`（会进入代理日志/浏览器历史，不推荐；每次使用计入 `/api/stats` 的 `legacy_token_location`，`ALLOW_LEGACY_TOKEN_LOCATIONS=false` 可关闭，关闭后只接受请求头）
 
 浏览器：问答页通过 `POST /api/session` 用令牌换取 HttpOnly、`SameSite=Strict` 的会话 cookie（1 小时）；带 cookie 的写操作必须同时带 `Origin` 或 `Sec-Fetch-Site` 同源证据。
 `/dashboard?token=<token>` 首次访问会建立会话并 **303 跳转到不带令牌的 `/dashboard`**，令牌不再停留在地址栏；浏览器历史/自动补全仍可能记下首次输入的网址，推荐从首页输入令牌后进入仪表盘。会话过期后仪表盘返回 403 并提示重新输入令牌。
 
-所有响应都带：`X-Request-ID`（可由客户端传入 8–64 位字母、数字或 `._-` 作为追踪号，不合规时由服务生成）、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`；`/api/*` 与 `/dashboard` 另带 `Cache-Control: no-store`。
+所有响应都带：`X-Request-ID`（可由客户端传入 8–64 位字母、数字或 `._-` 作为追踪号，不合规时由服务生成）、`Referrer-Policy: no-referrer`、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`；`/api/*` 与 `/dashboard` 另带 `Cache-Control: no-store`；带 `error_code` 的响应另带同值的 `X-Error-Code` 响应头。
 
 ## 接口详情
 
@@ -233,6 +233,8 @@ AI题库服务是一个基于 Anthropic 兼容协议（也支持 OpenAI Chat / R
 |---------|--------|------|
 | `ACCESS_TOKEN` | 无 | 访问令牌；局域网/Docker 部署必须设置 |
 | `ALLOW_REMOTE_WITHOUT_TOKEN` | `false` | 无令牌时是否允许非本机调用（高风险） |
+| `ALLOW_LEGACY_TOKEN_LOCATIONS` | `true` | 是否兼容网址/请求体里的令牌；设为 `false` 后只接受请求头 |
+| `CACHE_PERSIST_FILE` | 空 | 设置后答案缓存写入该 SQLite 文件（只存题目哈希与答案），重启后仍可命中 |
 | `RATE_LIMIT_PER_MINUTE` | `60` | 每客户端每分钟 AI 调用上限，0 表示不限 |
 | `MAX_TOKENS` / `SHORT_ANSWER_MAX_TOKENS` | `500` / `1024` | 输出上限；简答题至少取后者 |
 | `TEMPERATURE` / `OBJECTIVE_TEMPERATURE_CAP` | `0.7` / `0.3` | 简答题用前者；客观题不高于后者 |

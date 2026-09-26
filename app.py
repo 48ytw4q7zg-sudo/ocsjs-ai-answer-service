@@ -36,6 +36,7 @@ from config import Config, reload_config
 from ccswitch import is_sensitive_key
 from utils import (
     KNOWN_QUESTION_TYPES,
+    PersistentAnswerStore,
     PromptText,
     RateLimiter,
     ServiceMetrics,
@@ -140,7 +141,7 @@ _OPTIONS_FIELD_ALIASES = (
 
 
 def _extract_access_token(req):
-    """从请求头、查询参数、表单及 JSON Body 中提取访问令牌。"""
+    """优先从请求头取令牌；ALLOW_LEGACY_TOKEN_LOCATIONS 开启时再兼容网址、表单与 JSON 请求体里的旧写法。"""
     token = req.headers.get('X-Access-Token')
     if token:
         return token.strip()
@@ -154,14 +155,20 @@ def _extract_access_token(req):
         if token:
             return token
 
+    token = _legacy_access_token(req)
+    if token is None or not Config.ALLOW_LEGACY_TOKEN_LOCATIONS:
+        return None
+    _note_legacy_token_use()
+    return token
+
+
+def _legacy_access_token(req):
     token = req.args.get('token') or req.args.get('access_token')
     if token:
         return str(token).strip()
-
     token = req.form.get('token') or req.form.get('access_token')
     if token:
         return str(token).strip()
-
     if req.is_json:
         data = req.get_json(silent=True)
         if isinstance(data, dict):
@@ -169,6 +176,17 @@ def _extract_access_token(req):
             if token:
                 return str(token).strip()
     return None
+
+
+_legacy_token_warned = threading.Event()
+
+
+def _note_legacy_token_use():
+    metrics.incr('legacy_token_location')
+    if not _legacy_token_warned.is_set():
+        _legacy_token_warned.set()
+        logger.warning("收到放在网址或请求体里的访问令牌（旧写法，可能进入代理日志和浏览器历史）；"
+                       "建议 OCS 配置改用 headers 里的 X-Access-Token，改好后可设 ALLOW_LEGACY_TOKEN_LOCATIONS=false")
 
 
 class _ClientGeneration:
@@ -233,7 +251,9 @@ def _runtime_initialize():
         candidate_client = None
         try:
             candidate_client = build_ai_client()
-            candidate_cache = SimpleCache(Config.CACHE_EXPIRATION) if Config.ENABLE_CACHE else None
+            candidate_cache = SimpleCache(
+                Config.CACHE_EXPIRATION, namespace=_cache_namespace(), store=_answer_store(),
+            ) if Config.ENABLE_CACHE else None
         except Exception as exc:
             if candidate_client is not client:
                 _close_ai_client(candidate_client)
@@ -247,6 +267,26 @@ def _runtime_initialize():
         _runtime_init_error = None
         if previous_client is not None and previous_client is not client:
             _retire_client(previous_client)
+
+
+_answer_stores = {}
+
+
+def _cache_namespace():
+    # 换协议/模型或升级提示词后旧答案不再命中（磁盘缓存跨重启时尤其重要）。
+    return f"{Config.API_PROTOCOL}|{Config.ANTHROPIC_MODEL}|{PROMPT_VERSION}"
+
+
+def _answer_store():
+    """CACHE_PERSIST_FILE 对应的磁盘缓存；同一路径复用一个连接，未配置或不可用时返回 None。"""
+    path = Config.CACHE_PERSIST_FILE
+    if not path:
+        return None
+    key = str(Path(path).resolve())
+    store = _answer_stores.get(key)
+    if store is None:
+        store = _answer_stores[key] = PersistentAnswerStore(key)
+    return store if store.available else None
 
 
 def _initialize_runtime_if_needed() -> bool:
@@ -429,6 +469,9 @@ def _auth_failure_message():
     if not Config.ACCESS_TOKEN and not Config.ALLOW_REMOTE_WITHOUT_TOKEN:
         return ('未设置 ACCESS_TOKEN 时仅允许本机访问（须直接连接，Host 为 localhost/127.0.0.1/[::1]，'
                 '不经代理或隧道）；请设置 ACCESS_TOKEN，或显式 ALLOW_REMOTE_WITHOUT_TOKEN=true')
+    if (has_request_context() and not Config.ALLOW_LEGACY_TOKEN_LOCATIONS
+            and _legacy_access_token(request) is not None):
+        return '已关闭网址/请求体传令牌（ALLOW_LEGACY_TOKEN_LOCATIONS=false），请改用 X-Access-Token 请求头'
     return '无效的访问令牌'
 
 
@@ -490,6 +533,11 @@ def _apply_response_headers(response):
     response.headers.setdefault('X-Frame-Options', 'DENY')
     if request.path.startswith('/api/') or request.path == '/dashboard':
         response.headers.setdefault('Cache-Control', 'no-store')
+    if response.is_json:
+        # 监控和网关不必解析响应体，也能按错误类型统计（HTTP 200 的 uncertain_answer 同样带上）。
+        body = response.get_json(silent=True)
+        if isinstance(body, dict) and isinstance(body.get('error_code'), str):
+            response.headers.setdefault('X-Error-Code', body['error_code'])
     return response
 
 
@@ -1079,10 +1127,11 @@ def get_stats():
 @app.route('/dashboard', methods=['GET'])
 def dashboard():
     if not verify_access_token(request):
-        if Config.ACCESS_TOKEN:
+        message = _auth_failure_message()
+        if Config.ACCESS_TOKEN and message == '无效的访问令牌':
             # 浏览器会话 1 小时过期后直接刷新仪表盘会走到这里，给出可操作的提示。
-            return '访问令牌无效，或浏览器会话已过期（有效期 1 小时）：请回到首页输入访问令牌后重新打开仪表盘。', 403
-        return _auth_failure_message(), 403
+            message = '访问令牌无效，或浏览器会话已过期（有效期 1 小时）：请回到首页输入访问令牌后重新打开仪表盘。'
+        return message, 403
     if Config.ACCESS_TOKEN and _query_token(request) and _browser_request_is_local_origin(request):
         # 网址里的令牌只用一次：换成 HttpOnly 会话 cookie 后跳转到不带令牌的地址，令牌不再停留在地址栏、
         # 之后的书签和截图里；浏览器历史/自动补全仍可能记下首次输入的网址，推荐从首页输入令牌进入。
@@ -1256,6 +1305,22 @@ if Config.HOST.strip('[]') not in _LOOPBACK_HOSTS and not Config.ACCESS_TOKEN:
         logger.warning('高危：HOST=%s 对外监听且未设置 ACCESS_TOKEN，任何能访问该端口的人都能消耗模型额度', Config.HOST)
     else:
         logger.warning('HOST=%s 对外监听但未设置 ACCESS_TOKEN：非本机请求会被拒绝，请在 .env 设置 ACCESS_TOKEN', Config.HOST)
+# 已测试过的依赖版本范围（与 requirements.txt 一致）：超出时启动告警，避免升级后接口行为静默变化。
+_TESTED_DEPENDENCIES = {'anthropic': ('>=1,<2', 1, 2), 'httpx': ('>=0.28,<1', 0, 1)}
+
+
+def dependency_version_warnings():
+    warnings = []
+    for name, (spec, low, high) in _TESTED_DEPENDENCIES.items():
+        version = str(getattr(sys.modules.get(name), '__version__', '') or '')
+        match = re.match(r'(\d+)\.', version)
+        if match is None or not low <= int(match.group(1)) < high:
+            warnings.append(f'{name} {version or "版本未知"} 不在已测试的版本范围（{spec}）内，接口行为可能变化')
+    return warnings
+
+
+for _warning in dependency_version_warnings():
+    logger.warning(_warning)
 if not hasattr(anthropic, 'omit'):
     logger.warning('anthropic SDK %s 缺少 omit，便携模式无法可靠替换请求头；请按 requirements.txt 安装 1.x 版本',
                    getattr(anthropic, '__version__', '未知'))

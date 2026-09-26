@@ -92,8 +92,13 @@ class PortableWindow:
             entry.grid(row=i // 3 * 2 + 1, column=i % 3, sticky="ew", padx=(0, 12), pady=(2, 6))
             self.widgets[name] = entry
             advanced.columnconfigure(i % 3, weight=1)
+        cache_row = ttk.Frame(page)
+        cache_row.grid(row=8, column=0, columnspan=2, sticky="w")
         self.cache_enabled = tk.BooleanVar(value=prefs.cache_enabled)
-        ttk.Checkbutton(page, text="启用本次运行的答案缓存", variable=self.cache_enabled).grid(row=8, column=0, columnspan=2, sticky="w")
+        ttk.Checkbutton(cache_row, text="启用答案缓存", variable=self.cache_enabled).pack(side="left")
+        self.cache_persist = tk.BooleanVar(value=prefs.cache_persist)
+        ttk.Checkbutton(cache_row, text="缓存保存到 data 文件夹（明文答案，不含题目原文；下次启动仍可用）",
+                        variable=self.cache_persist).pack(side="left", padx=(12, 0))
         self.remember = tk.BooleanVar(value=False)
         ttk.Checkbutton(page, text="保存时用密码加密记住密钥和本地访问口令", variable=self.remember).grid(row=9, column=0, columnspan=2, sticky="w")
         buttons = ttk.Frame(page)
@@ -151,6 +156,9 @@ class PortableWindow:
             "它仍然是凭据，不要公开分享。复制到剪贴板的口令或配置会在 60 秒后或关闭窗口时自动清除；"
             "若开启了 Windows 剪贴板历史（Win+V），历史里的副本需要你手动删除。"
             "怀疑泄露时点击“生成新口令”，再点“应用到本次运行”，旧口令立即失效。\n\n"
+            "答案缓存默认只在内存中。勾选“缓存保存到 data 文件夹”后，答案（不含题目原文）写入 data\\answer-cache.sqlite3，"
+            "下次启动仍可命中；“清空答案缓存”会一并清空，也可直接删除该文件。\n\n"
+            "每次保存都会把上一份配置留作 data\\profile.json.bak；主文件损坏时自动改用备份并提示。\n\n"
             "关闭窗口会停止本地服务。退出完成后再拔出 U 盘。"
             "程序未进行商业代码签名；系统可能提示来源未知。不要关闭系统安全防护。\n\n"
             "‘运行时已就绪’仅表示配置已装载；以一次实际问答成功判断模型服务是否可用。"
@@ -171,6 +179,7 @@ class PortableWindow:
                 expected = "整数" if kind is int else "数字"
                 raise PreferenceError(name, f"{FIELD_LABELS[name]}应为有效{expected}。") from None
         values["cache_enabled"] = self.cache_enabled.get()
+        values["cache_persist"] = self.cache_persist.get()
         return Preferences.from_mapping(values)
 
     def _focus_field(self, field):
@@ -399,6 +408,8 @@ def main():
     notice = ""
     try:
         preferences = store.load_preferences()
+        if store.recovered_from_backup:
+            notice = "主配置文件已损坏，本次使用上一次保存时的备份（profile.json.bak）；点击“保存便携配置”即可修复主文件。"
     except (ValueError, OSError) as exc:
         preferences = Preferences()
         notice = "原配置未能读取，已用临时默认设置启动；原文件未覆盖。" + str(exc)
