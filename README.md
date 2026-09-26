@@ -42,6 +42,43 @@ EduBrain 提供两类运行形态：
 > - 根据[《生成式人工智能服务管理暂行办法》](http://www.cac.gov.cn/2023-07/13/c_1690898327029107.htm)的要求，请勿对中国地区公众提供一切未经备案的生成式人工智能服务。
 > - 使用者应当遵守相关法律法规，承担相应的法律责任。
 > - 服务不对 AI 生成内容的准确性做出保证。
+> - 仅用于用户自有学习辅助，不鼓励、不支持任何考试作弊或违反课程平台规则的用法；模型调用费用由使用者自行承担。
+
+---
+
+## 2026-09 安全与质量加固（升级必读）
+
+| 变化 | 以前 | 现在 | 需要你做什么 |
+|------|------|------|------|
+| 未设置 `ACCESS_TOKEN` | 任何能连上端口的人都能调用 | **只允许本机直连调用**：来源必须是 127.0.0.1/::1，Host 必须是 localhost/127.0.0.1/[::1]（防 DNS 重绑定）；带 `X-Forwarded-For`/`Forwarded` 等代理头、或被其它网站用图片/iframe/表单跳转触发的请求一律 403 | 局域网 / Docker / **反向代理或内网穿透隧道**部署必须在 `.env` 设置 `ACCESS_TOKEN`；确需免令牌对外开放才设 `ALLOW_REMOTE_WITHOUT_TOKEN=true`（高风险） |
+| 令牌传递 | 头、查询参数、表单、JSON 请求体都可 | 全部仍兼容；**推荐** `X-Access-Token` 请求头。网页问答页与便携版已改用请求头；`/dashboard?token=` 首次访问后换成 HttpOnly 会话并 303 跳转到不带令牌的地址（浏览器历史/自动补全仍可能记下首次输入的网址，推荐从首页输入令牌进入）；会话 1 小时过期后仪表盘会提示重新输入 | OCS 配置改用 `headers`（见下方示例）；旧的 `data.token` 写法继续可用 |
+| 调用频率 | 无限制 | 每个客户端每分钟最多 60 次 AI 调用（缓存命中不计），超出返回 429 + `Retry-After` | 需要更高频率时调 `RATE_LIMIT_PER_MINUTE`，0 表示不限 |
+| 模型答不出 | 可能把“无法确定/抱歉”当答案返回 | 返回 `code=0`、`error_code=uncertain_answer`，不写缓存，OCS 会换用其它题库（回答为约定的“无法确定”时任何题型都算；“不知道/抱歉……”等说法只在单选/多选/判断题（及未标题型但带选项的题）中算，答案本身是某个选项时不算） | 无 |
+| 题型参数 | 未知题型原样透传 | 未知题型按通用题目处理，响应 `type` 为 `null`（已知题型回显规范化结果，如 `1` → `single`） | 无 |
+| 选项上限 | — | 最多 64 个选项（按 `A.`/`B.` 标号计数，长选项折行不重复计；无标号时按行计），8000 字符；选项里的 `<p>`、`&lt;` 等字面内容原样保留 | 可用 `MAX_OPTIONS` 调整 |
+| 客观题温度 | 统一用 `TEMPERATURE` | 单选/多选/判断/填空不高于 `OBJECTIVE_TEMPERATURE_CAP`（默认 0.3）；简答题输出上限至少 `SHORT_ANSWER_MAX_TOKENS`（默认 1024） | 可在 `.env` 调整 |
+| 上游鉴权失败/额度不足/请求被拒/限流/超时 | 会再换提示词重试一次 | 上游返回 400/401/402/403/404/413/422、429、超时或连接失败时直接失败（429、超时和连接失败由 SDK 按 `API_MAX_RETRIES` 重试），提示可自助排查的中文原因；上游返回无法解析的内容（多半是地址或协议选错）返回 502 `upstream_invalid_response` | 无 |
+| 开发服务器访问日志 | 记录完整网址（含 `?token=` 与题目） | 只记录路径，不记录查询串 | 无 |
+| 响应字段 | `code/question/answer/msg` | 额外返回 `type`、`cached`、`cache_age_seconds`、`model`、`prompt_version`、`request_id`、`error_code`；响应头带 `X-Request-ID`、`X-Question-Field` | 无（OCS 只读取 `code/question/answer/msg`） |
+| 新接口 | — | `/api/ready`（就绪探针）、`/openapi.json`（OpenAPI 3 契约）；`/api/stats` 增加 `metrics`（QPS、延迟分位、缓存命中率、失败/重试率）与 `cache` 统计 | 无 |
+| 配置热重载 | `settings.json` 正在写入时会误回退到 `.env` | 文件暂不可读时重读一次，仍失败则保留当前配置并返回失败 | 无 |
+| DEBUG | 可与 `HOST=0.0.0.0` 同时启用 | `python app.py`/`start.bat` 拒绝在非回环地址开启 DEBUG | 无 |
+
+**超时预算（同一张表）**：单次上游请求 ≤ `API_TIMEOUT`（默认 30 秒），SDK 自身再重试 `API_MAX_RETRIES` 次（默认 2），空答案/上游 5xx 时换简化提示词再试一轮；
+最坏耗时 = `API_TIMEOUT × (API_MAX_RETRIES + 1) × 2`（默认 180 秒）。gunicorn worker 超时 = 该值 + 120 秒；便携版窗口等待 = 该值 + 30 秒（且不少于 120 秒）；
+**OCS 客户端自身约 60 秒就放弃等待**，上游经常很慢时请把 `API_TIMEOUT`/`API_MAX_RETRIES` 调小，让失败更早返回。
+
+**运行形态**：gunicorn 固定 `workers=1` + `gthread` 4 线程，缓存、限流计数、仪表盘记录都在**这一个进程的内存里**；
+直接加 workers 不会线性扩容，反而会让各进程缓存/限流互不相通。需要横向扩展时，应先把缓存与会话外置（本项目未提供）。
+
+**使用范围与隐私**：本服务仅用于用户自有学习辅助，不鼓励、不支持任何考试作弊或违反课程平台规则的用法；
+答案由第三方模型生成，可能出错，请自行核对。题目在本机处理，只发送给你配置的模型服务；日志默认只记录题目长度、题型和哈希摘要，不写题目原文；
+仪表盘的问答记录只在内存中保留最近 100 条，重启即清空。模型调用费用由配置 API Key 的使用者自行承担。
+便携版**不读取**本机 `.env`、cc-switch 与系统代理；源码服务模式默认读取 `~/.claude/settings.json`（可用 `CCSWITCH_ENABLED=false` 关闭）。
+
+**发布前检查清单**：① 全部测试通过（见 AGENTS.md 与 `tests/test_hardening.py`）；② `portable_entry.py --self-test` 的 `passed=true`，并包含 4 项 `fault_*` 故障注入检查；
+③ `packaging/verify_portable.py` 快照完整性通过；④ 便携版帮助文字“不读取本机 .env、cc-switch”与 `config.py` 中 `PORTABLE_MODE` 分支一致（`tests/test_hardening.py` 与自检 `host_environment_isolation` 覆盖）；
+⑤ 依赖安全：在联网环境执行 `pip install pip-audit && pip-audit -r requirements.txt`，需要可复现构建时用 `pip-compile` 生成锁文件（本次未执行，见交付说明）。
 
 ---
 
@@ -53,8 +90,9 @@ EduBrain 提供两类运行形态：
 - **运行时配置重载** (v2.1.0): `/api/config/reload` 端点支持不停机切换 API 配置，ccswitch 配置变更即时生效
 - **直连 API 支持**: ccswitch 离线时自动回退到 `.env` 配置，支持直连 DeepSeek 等 Anthropic 兼容 API
 - **OCS 兼容**: 完全兼容 OCS 的 AnswererWrapper 题库接口
-- **高性能缓存**: 线程安全的内存缓存（MD5 哈希键 + TTL 过期 + LRU 淘汰）
-- **安全可靠**: 支持 ACCESS_TOKEN 双重验证（Header `X-Access-Token` / URL `?token=`），仪表盘和健康检查会在配置令牌后隐藏敏感运行信息
+- **高性能缓存**: 线程安全的内存缓存（SHA-256 键 + 空闲 TTL + O(1) LRU 淘汰 + 命中率统计）；切换模型/重载配置会重建缓存
+- **安全可靠**: 未设置 ACCESS_TOKEN 时只允许本机直连调用（拒绝 DNS 重绑定、代理/隧道转发和跨站嵌入触发的请求）；推荐 `X-Access-Token` 请求头（兼容 Bearer、`?token=`、表单/JSON 字段），定长摘要比较；限流、请求体上限、`Referrer-Policy: no-referrer` 等安全响应头；配置重载/清缓存拒绝跨站请求并写审计日志；仪表盘和健康检查会在配置令牌后隐藏敏感运行信息
+- **可观测性**: 每个响应带 `X-Request-ID`；`/api/stats` 提供 QPS、延迟分位、缓存命中率、失败/重试率与答案解析路径统计；`/api/ready` 就绪探针；`/openapi.json` 契约
 - **多种题型**: 支持单选(single)、多选(multiple)、判断(judgement)、填空(completion)、简答(short-answer)
 - **错误处理**: API 超时、连接失败、HTTP 错误分级处理与友好提示
 - **数据统计**: `/dashboard` 仪表盘实时监控服务状态、ccswitch 配置详情和问答历史，ccswitch 敏感环境变量只显示 `<hidden>`
@@ -165,7 +203,7 @@ PowerShell 若禁脚本：`Set-ExecutionPolicy -Scope Process RemoteSigned`。
 
 ### C. OCS
 
-`GET/POST http://127.0.0.1:5000/api/search`，字段别名见 `ocs_config_example.json`。配了 `ACCESS_TOKEN` 则带 `X-Access-Token` 或 `?token=`。
+`GET/POST http://127.0.0.1:5000/api/search`，字段别名见 `ocs_config_example.json`。配了 `ACCESS_TOKEN` 时推荐在 OCS 配置的 `headers` 里写 `X-Access-Token`（旧的 `?token=`/`data.token` 仍兼容）；OCS 在别的电脑上访问本服务时必须设置 `ACCESS_TOKEN`。
 
 ### 干净系统环境表
 
@@ -394,6 +432,9 @@ python health_smoke.py --host 127.0.0.1 --port 5000 --json --output health_smoke
     "method": "get",
     "type": "GM_xmlhttpRequest",
     "contentType": "json",
+    "headers": {
+      "X-Access-Token": "YOUR_ACCESS_TOKEN"
+    },
     "data": {
       "title": "${title}",
       "type": "${type}",
@@ -403,6 +444,11 @@ python health_smoke.py --host 127.0.0.1 --port 5000 --json --output health_smoke
   }
 ]
 ```
+
+> 把 `YOUR_ACCESS_TOKEN` 换成 `.env` 中的 `ACCESS_TOKEN`（请求头只能用英文字母、数字和符号）；未设置令牌时删除整个 `headers`。
+> 令牌放在 `headers` 里不会出现在请求网址、代理日志和浏览器历史中。便携版“复制接入配置”生成的就是这种写法。
+>
+> 未设置令牌时，其它网页虽然读不到答题结果，仍可能用 `fetch` 让你的浏览器向本服务发起答题请求并消耗额度；长期运行建议始终设置 `ACCESS_TOKEN`。
 
 ---
 
@@ -622,12 +668,19 @@ def reload_config() -> bool:
 | `API_TIMEOUT` | `API_TIMEOUT` | float | `30.0` | API 请求超时秒数 |
 | `API_MAX_RETRIES` | `API_MAX_RETRIES` | int | `2` | API 自动重试次数 |
 | `LOG_LEVEL` | `LOG_LEVEL` | str | `"INFO"` | 日志级别 |
-| `ACCESS_TOKEN` | `ACCESS_TOKEN` | str\|None | `None` | 访问令牌（None=不验证） |
+| `ACCESS_TOKEN` | `ACCESS_TOKEN` | str\|None | `None` | 访问令牌（None=只允许本机回环地址调用） |
+| `ALLOW_REMOTE_WITHOUT_TOKEN` | `ALLOW_REMOTE_WITHOUT_TOKEN` | bool | `False` | 无令牌时是否允许非本机调用（高风险） |
+| `RATE_LIMIT_PER_MINUTE` | `RATE_LIMIT_PER_MINUTE` | int | `60` | 每客户端每分钟 AI 调用上限（缓存命中不计，0=不限） |
+| `CCSWITCH_ENABLED` | `CCSWITCH_ENABLED` | bool | `True` | 服务模式是否读取 `~/.claude/settings.json`（便携版始终不读） |
 | `MAX_TOKENS` | `MAX_TOKENS` | int | `500` | AI 响应最大 token 数 |
-| `TEMPERATURE` | `TEMPERATURE` | float | `0.7` | AI 生成温度 (0-1) |
+| `SHORT_ANSWER_MAX_TOKENS` | `SHORT_ANSWER_MAX_TOKENS` | int | `1024` | 简答题输出上限下限 |
+| `TEMPERATURE` | `TEMPERATURE` | float | `0.7` | AI 生成温度 (0-2) |
+| `OBJECTIVE_TEMPERATURE_CAP` | `OBJECTIVE_TEMPERATURE_CAP` | float | `0.3` | 单选/多选/判断/填空温度上限 |
 | `ENABLE_CACHE` | `ENABLE_CACHE` | bool | `True` | 是否启用缓存 |
 | `CACHE_EXPIRATION` | `CACHE_EXPIRATION` | int | `86400` | 缓存过期秒数（默认 24h） |
 | `MAX_QUESTION_LENGTH` | `MAX_QUESTION_LENGTH` | int | `2000` | 问题最大字符数 |
+| `MAX_OPTIONS` / `MAX_OPTIONS_LENGTH` | 同名 | int | `64` / `8000` | 选项个数（按 A./B. 标号计，无标号按行计）与总字符上限 |
+| `MAX_REQUEST_BYTES` | `MAX_REQUEST_BYTES` | int | `262144` | 请求体上限（超出返回 413） |
 | `CONFIG_LOADED_AT` | — | float | 启动时间 | **v2.1.0**: 配置最后加载时间戳 |
 
 ---
@@ -781,12 +834,17 @@ POST /api/config/reload
 
 ```python
 def verify_access_token(req):
-    if Config.ACCESS_TOKEN:                              # 配置了令牌才验证
-        token = req.headers.get('X-Access-Token') \      # 优先 HTTP Header
-             or req.args.get('token')                    # 回退 URL 参数
-        if not token or token != Config.ACCESS_TOKEN:
-            return False
-    return True
+    expected = Config.ACCESS_TOKEN
+    if expected:
+        token = _extract_access_token(req)        # X-Access-Token → Bearer → ?token= → 表单 → JSON
+        if token is None:
+            return _verify_browser_session(req, expected)   # 同源会话 cookie；写操作需 Origin/Sec-Fetch-Site
+        return _token_matches(token, expected)     # SHA-256 定长摘要 + compare_digest，拒绝控制字符/超长
+    if Config.ALLOW_REMOTE_WITHOUT_TOKEN:
+        return True
+    # 未设置令牌：只信任本机直连——回环来源地址 + 回环 Host（防 DNS 重绑定）+ 无代理转发头 + 非跨站嵌入
+    return (_is_loopback_request(req) and _host_is_loopback(req.host)
+            and not _is_forwarded_request(req) and not _is_cross_site_embed(req))
 ```
 
 **`docs()` Markdown 渲染**:

@@ -64,9 +64,14 @@ class AppSafetyTests(unittest.TestCase):
         app_module.Config.ACCESS_TOKEN = "expected-token"
 
         missing = app_module.app.test_client().get("/dashboard")
-        allowed = app_module.app.test_client().get("/dashboard?token=expected-token")
+        exchanged = app_module.app.test_client().get("/dashboard?token=expected-token")
+        allowed = app_module.app.test_client().get("/dashboard?token=expected-token", follow_redirects=True)
 
         self.assertEqual(missing.status_code, 403)
+        # 网址中的令牌换成会话 cookie 后跳转到不带令牌的地址。
+        self.assertEqual(exchanged.status_code, 303)
+        self.assertEqual(exchanged.headers["Location"], "/dashboard")
+        self.assertNotIn("expected-token", exchanged.headers["Set-Cookie"])
         self.assertEqual(allowed.status_code, 200)
         self.assertIn("X-Access-Token", allowed.get_data(as_text=True))
 

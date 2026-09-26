@@ -11,7 +11,7 @@ import logging
 import math
 from dotenv import load_dotenv
 
-from ccswitch import get_ccswitch_config, reload_ccswitch_config
+from ccswitch import CcswitchUnreadableError, get_ccswitch_config, reload_ccswitch_config
 from portable_paths import is_portable, data_root
 
 logger = logging.getLogger(__name__)
@@ -21,13 +21,30 @@ PORTABLE_MODE = is_portable()
 if not PORTABLE_MODE:
     load_dotenv(override=True)
 
-# 尝试从 ccswitch 获取配置（优先）
-_ccswitch = None if PORTABLE_MODE else get_ccswitch_config()
-_config_loaded_at = time.time()
-
 
 def _environment_value(name):
     return None if PORTABLE_MODE else os.getenv(name)
+
+
+def _ccswitch_enabled() -> bool:
+    """服务模式默认读取 ~/.claude/settings.json；CCSWITCH_ENABLED=false 可关闭。便携模式从不读取。"""
+    if PORTABLE_MODE:
+        return False
+    value = _environment_value("CCSWITCH_ENABLED")
+    return value is None or str(value).strip().lower() not in {"0", "false", "no", "off", "n"}
+
+
+def request_budget_seconds(api_timeout: float, max_retries: int) -> float:
+    """一次 /api/search 最坏耗时：两轮提示词 × (1 + SDK 重试次数) × 单次超时。
+
+    gunicorn worker 超时与便携控制器的等待时间都以此为基准再加余量，保持同一张超时表。
+    """
+    return float(api_timeout) * (int(max_retries) + 1) * 2
+
+
+# 尝试从 ccswitch 获取配置（优先）
+_ccswitch = get_ccswitch_config() if _ccswitch_enabled() else None
+_config_loaded_at = time.time()
 
 
 def _env_str(name: str, default: str) -> str:
@@ -173,7 +190,18 @@ def reload_config() -> bool:
         _config_loaded_at = time.time()
         Config.CONFIG_LOADED_AT = _config_loaded_at
         return False
-    new_config = reload_ccswitch_config()
+    new_config = None
+    if _ccswitch_enabled():
+        try:
+            new_config = reload_ccswitch_config(strict=True)
+        except CcswitchUnreadableError:
+            # cc-switch 可能正在写 settings.json：稍等重读一次，仍失败则保留当前配置，不误回退到 .env。
+            time.sleep(0.2)
+            new_config = reload_ccswitch_config(strict=True)
+        if new_config is None and Config.CONFIG_SOURCE == "ccswitch":
+            # 上次来自 ccswitch、这次文件却不存在：cc-switch 可能正在替换文件，稍等再读一次才回退 .env。
+            time.sleep(0.2)
+            new_config = reload_ccswitch_config(strict=True)
     if new_config and new_config.get("api_key"):
         _ccswitch = new_config
     else:
@@ -236,10 +264,20 @@ class Config:
 
     # ---- 安全配置 ----
     ACCESS_TOKEN = _env_str("ACCESS_TOKEN", "") or None
+    # 未设置 ACCESS_TOKEN 时默认只允许本机（回环地址）调用；局域网/Docker 请设置令牌，
+    # 或显式 ALLOW_REMOTE_WITHOUT_TOKEN=true 接受“任何可达客户端都能调用”的风险。
+    ALLOW_REMOTE_WITHOUT_TOKEN = _env_bool("ALLOW_REMOTE_WITHOUT_TOKEN", False)
+    # 每个客户端每分钟最多触发的 AI 调用次数（缓存命中不计）；0 表示不限。
+    RATE_LIMIT_PER_MINUTE = _env_int("RATE_LIMIT_PER_MINUTE", 60, min_value=0, max_value=100000)
+    CCSWITCH_ENABLED = _ccswitch_enabled()
 
     # ---- AI 响应配置 ----
     MAX_TOKENS = _env_int("MAX_TOKENS", 500, min_value=1, max_value=4096)
+    # 简答题需要完整句子，输出上限至少取该值，避免被截断后整题失败。
+    SHORT_ANSWER_MAX_TOKENS = _env_int("SHORT_ANSWER_MAX_TOKENS", 1024, min_value=1, max_value=8192)
     TEMPERATURE = _env_float("TEMPERATURE", 0.7, min_value=0.0, max_value=2.0)
+    # 单选/多选/判断/填空需要唯一解，温度不高于该上限；简答题沿用 TEMPERATURE。
+    OBJECTIVE_TEMPERATURE_CAP = _env_float("OBJECTIVE_TEMPERATURE_CAP", 0.3, min_value=0.0, max_value=2.0)
 
     # ---- 缓存配置 ----
     ENABLE_CACHE = _env_bool("ENABLE_CACHE", True)
@@ -247,6 +285,10 @@ class Config:
 
     # ---- 输入验证 ----
     MAX_QUESTION_LENGTH = _env_int("MAX_QUESTION_LENGTH", 2000, min_value=20, max_value=10000)
+    # 按带标号的选项计数（长选项折行不重复计），没有标号时按行计数。
+    MAX_OPTIONS = _env_int("MAX_OPTIONS", 64, min_value=1, max_value=200)
+    MAX_OPTIONS_LENGTH = _env_int("MAX_OPTIONS_LENGTH", 8000, min_value=100, max_value=100000)
+    MAX_REQUEST_BYTES = _env_int("MAX_REQUEST_BYTES", 256 * 1024, min_value=4096, max_value=10 * 1024 * 1024)
 
     # ---- 配置加载时间 ----
     CONFIG_LOADED_AT = _config_loaded_at

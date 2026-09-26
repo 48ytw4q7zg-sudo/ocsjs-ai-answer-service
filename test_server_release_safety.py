@@ -119,6 +119,8 @@ class ServerReleaseSafetyTests(unittest.TestCase):
         service.Config.IS_PORTABLE = False
         service.cache = SimpleCache(60)
         service._runtime_init_error = None
+        # 每个用例独立计数，避免前序用例的调用量触发每分钟限流。
+        service.rate_limiter.reset()
         self.http = service.app.test_client()
         self.clients = []
 

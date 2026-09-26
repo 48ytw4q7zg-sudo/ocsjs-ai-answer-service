@@ -7,6 +7,8 @@ services:
       - "${PORT:-5000}:${PORT:-5000}"
     volumes:
       - ./logs:/app/logs
+    # .env 不会打进镜像（见 .dockerignore）；容器内非本机请求必须携带 ACCESS_TOKEN，
+    # 请在 .env 中设置 ACCESS_TOKEN（或使用 Docker secrets / 编排平台的密钥注入），切勿提交真实 .env。
     env_file:
       - .env
     environment:

@@ -4,6 +4,7 @@ This entry uses app.py and its source configuration; it does not activate
 portable mode. Importing this helper alone does not load configuration.
 """
 import argparse
+import errno
 import http.client
 import json
 import math
@@ -20,6 +21,10 @@ class StartupError(RuntimeError):
     pass
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_ADDRESS_IN_USE = {errno.EADDRINUSE, 10048}
+
+
 def _create_server():
     from config import Config
     from app import app
@@ -30,9 +35,16 @@ def _create_server():
             # Query strings can contain the local access token.
             pass
 
-    app.debug = Config.DEBUG
     host = Config.HOST.strip().strip("[]")
-    return make_server(host, Config.PORT, app, threaded=True, request_handler=RequestHandler), host
+    if Config.DEBUG and host not in _LOOPBACK_HOSTS:
+        raise StartupError("DEBUG=True 时只能监听 127.0.0.1/::1；请关闭 DEBUG 或把 HOST 改回 127.0.0.1")
+    app.debug = Config.DEBUG
+    try:
+        return make_server(host, Config.PORT, app, threaded=True, request_handler=RequestHandler), host
+    except OSError as exc:
+        if exc.errno in _ADDRESS_IN_USE or getattr(exc, "winerror", None) == 10048:
+            raise StartupError(f"端口 {Config.PORT} 已被占用：请关闭占用该端口的程序，或在 .env 中修改 PORT") from None
+        raise
 
 
 def _browser_url(host, port):
@@ -80,7 +92,8 @@ def main(argv=None, *, block=True):
                 outcome.put(("server", (server, host)))
             server.serve_forever(poll_interval=0.1)
         except BaseException as exc:
-            outcome.put(("error", type(exc).__name__))
+            # StartupError 是给用户看的可操作提示；其它异常只报类型，避免泄露内部细节。
+            outcome.put(("error", str(exc) if isinstance(exc, StartupError) else type(exc).__name__))
 
     deadline = time.monotonic() + options.timeout
     worker = threading.Thread(target=serve, name="source-http", daemon=True)

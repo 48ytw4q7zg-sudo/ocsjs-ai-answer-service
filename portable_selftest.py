@@ -13,6 +13,7 @@ import ssl
 import sys
 import tempfile
 import threading
+import time
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, ProxyHandler, Request, build_opener
 
@@ -59,7 +60,21 @@ def run():
             pass
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
-            if self.path == "/v1/responses":
+            model = body.get("model", "")
+            # 故障注入：用模型名选择上游行为，验证界面拿到的是可自助排查的中文提示。
+            if model == "fault-auth":
+                raw = json.dumps({"error": {"message": "SYNTHETIC_UPSTREAM_DETAIL"}}).encode()
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            if model == "fault-timeout":
+                time.sleep(2.5)
+            if self.path == "/v1/chat/completions" and model == "fault-length":
+                value = {"choices": [{"message": {"content": "Alp"}, "finish_reason": "length"}]}
+            elif self.path == "/v1/responses":
                 value = {"output": [{"type": "message", "content": [{"type": "output_text", "text": "Alpha"}]}]}
             elif self.path == "/v1/chat/completions":
                 value = {"choices": [{"message": {"content": "Alpha"}}]}
@@ -90,6 +105,12 @@ def run():
             check("loopback_binding", controller.server.effective_host == "127.0.0.1")
             health = controller.status()
             check("unconfigured_http_responds", health.get("runtime_ready") is False)
+            try:
+                controller.ask("Synthetic question before configuration", ["Alpha", "Beta"], "single")
+            except RuntimeError as exc:
+                check("fault_missing_key_readable", "未就绪" in str(exc))
+            else:
+                raise AssertionError("fault_missing_key_readable")
             cookies = CookieJar()
             opener = build_opener(ProxyHandler({}), HTTPCookieProcessor(cookies))
             session_request = Request(controller.url + "/api/session",
@@ -121,11 +142,29 @@ def run():
                 exc.close()
             else:
                 raise AssertionError("browser_session_revoked_after_token_change")
+            fault_base = f"http://127.0.0.1:{provider.server_port}/v1"
+            for model, expected, name, timeout in (
+                ("fault-auth", "鉴权失败", "fault_wrong_key_readable", 5),
+                ("fault-length", "未完成", "fault_truncated_readable", 5),
+                ("fault-timeout", "超时", "fault_timeout_readable", 1),
+            ):
+                controller.apply(replace(preferences, protocol="openai_chat", base_url=fault_base, model=model,
+                                         timeout=timeout), "SYNTHETIC_SELFTEST_KEY", "SYNTHETIC_LOCAL_TOKEN")
+                try:
+                    controller.ask("Synthetic fault " + model, ["Alpha", "Beta"], "single")
+                except RuntimeError as exc:
+                    check(name, expected in str(exc) and "SYNTHETIC_SELFTEST_KEY" not in str(exc)
+                          and "SYNTHETIC_UPSTREAM_DETAIL" not in str(exc))
+                else:
+                    raise AssertionError(name)
+            controller.apply(preferences, "SYNTHETIC_SELFTEST_KEY", "SYNTHETIC_LOCAL_TOKEN")
             integration = controller.integration_config()
             check("ocs_integration_schema", isinstance(integration, list) and len(integration) == 1
                   and integration[0]["data"]["title"] == "${title}"
                   and integration[0]["data"]["options"] == "${options}"
-                  and integration[0]["data"]["token"] == controller.access_token
+                  and integration[0]["headers"]["X-Access-Token"] == controller.access_token
+                  and "token" not in integration[0]["data"]
+                  and controller.access_token not in integration[0]["url"]
                   and integration[0]["handler"] == "return (res)=> res.code === 1 ? [res.question, res.answer] : [res.msg, undefined]")
             old_model, old_client, old_cache = controller.config.ANTHROPIC_MODEL, controller.module.client, controller.module.cache
             original_builder = controller.module.build_ai_client

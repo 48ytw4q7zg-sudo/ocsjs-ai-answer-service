@@ -14,12 +14,17 @@ import portable_paths
 from portable_settings import Preferences
 
 
+def _header_safe(token):
+    # HTTP 头只能可靠承载可见 ASCII；其它字符的口令退回请求体/查询参数传输。
+    return bool(token) and all(33 <= ord(char) <= 126 for char in token)
+
+
 class PortableController:
     def __init__(self, preferences=None, *, root=None, data=None):
         portable_paths.activate(root=root, data=data)
         self.preferences = preferences or Preferences()
         self.preferences.validate()
-        self.access_token = secrets.token_urlsafe(24)
+        self.access_token = self.generate_access_token()
         self.api_key = ""
         self.notice = ""
         self._lock = threading.RLock()
@@ -27,6 +32,8 @@ class PortableController:
         self._closed = False
         config = importlib.import_module("config")
         self.config = config.Config
+        # config 必须在 activate() 之后导入（否则会读取宿主机 .env/cc-switch），因此在此处取用超时预算函数。
+        self._request_budget = config.request_budget_seconds
         self._set_config(self.preferences, "", self.access_token)
         self.module = importlib.import_module("app")
         self.application = self.module.app
@@ -41,6 +48,10 @@ class PortableController:
     @property
     def url(self):
         return f"http://127.0.0.1:{self.port}"
+
+    @staticmethod
+    def generate_access_token():
+        return secrets.token_urlsafe(24)
 
     def _set_config(self, preferences, api_key, access_token):
         values = {
@@ -133,13 +144,16 @@ class PortableController:
             if self._closed:
                 raise RuntimeError("服务已经关闭。")
             token, url = self.access_token, self.url
+        headers = {"X-Access-Token": token} if _header_safe(token) else {}
         if payload is None:
-            request = Request(url + path + "?" + urlencode({"token": token}))
+            query = "" if headers else "?" + urlencode({"token": token})
+            request = Request(url + path + query, headers=headers)
         else:
             body = dict(payload)
-            body["token"] = token
+            if not headers:
+                body["token"] = token
             request = Request(url + path, json.dumps(body, ensure_ascii=False).encode("utf-8"),
-                              {"Content-Type": "application/json"}, method="POST")
+                              {"Content-Type": "application/json", **headers}, method="POST")
         opener = build_opener(ProxyHandler({}))
         try:
             with opener.open(request, timeout=timeout) as response:
@@ -169,22 +183,30 @@ class PortableController:
         return self.request("/api/stats")
 
     def ask(self, question, options, question_type):
+        budget = self._request_budget(self.preferences.timeout + 2, self.preferences.max_retries)
         return self.request("/api/search", {
             "question": question, "options": options, "type": question_type,
-        }, timeout=max(120, (self.preferences.timeout + 2) * (self.preferences.max_retries + 1) * 2 + 30))
+        }, timeout=max(120, budget + 30))
 
     def clear_cache(self):
         return self.request("/api/cache/clear", {})
 
     def integration_config(self):
+        # OCS AnswererWrapper 支持 headers：口令放请求头，不出现在请求网址（代理日志/历史记录）里。
+        data = {"title": "${title}", "options": "${options}", "type": "${type}"}
+        headers = {}
+        if _header_safe(self.access_token):
+            headers["X-Access-Token"] = self.access_token
+        else:
+            data["token"] = self.access_token
         return [{
             "name": "EduBrain Portable",
             "homepage": self.url,
             "url": self.url + "/api/search",
             "method": "get",
             "contentType": "json",
-            "data": {"title": "${title}", "options": "${options}", "type": "${type}",
-                     "token": self.access_token},
+            "headers": headers,
+            "data": data,
             "handler": "return (res)=> res.code === 1 ? [res.question, res.answer] : [res.msg, undefined]",
         }]
 

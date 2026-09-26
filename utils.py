@@ -9,19 +9,28 @@ import time
 import threading
 import hashlib
 import json
+import math
 import re
+from collections import Counter, OrderedDict, deque
 from collections.abc import Mapping
 from typing import Dict, Any, Optional
 
 
 class SimpleCache:
-    """线程安全的内存缓存，支持 TTL 过期和 LRU 淘汰"""
+    """线程安全的内存缓存：空闲 TTL 过期 + O(1) LRU 淘汰 + 命中率统计。
+
+    缓存只在内存中；重载配置/切换模型会重建运行时并换用新缓存，因此键中不需要模型名。
+    """
 
     def __init__(self, expiration_seconds: int = 86400, max_size: int = 10000):
-        self.cache: Dict[str, tuple[float, str]] = {}
+        # key -> (最近访问时间, 答案, 写入时间)；OrderedDict 顺序即 LRU 顺序。
+        self.cache: "OrderedDict[str, tuple[float, str, float]]" = OrderedDict()
         self.expiration = max(0.0, float(expiration_seconds))
         self.max_size = max(1, int(max_size))
         self._lock = threading.RLock()
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
 
     def __len__(self) -> int:
         with self._lock:
@@ -31,24 +40,30 @@ class SimpleCache:
     @staticmethod
     def _generate_key(question: str, question_type: str, options: str) -> str:
         content = json.dumps([question, question_type, options], ensure_ascii=False, separators=(',', ':'))
-        return hashlib.md5(content.encode('utf-8')).hexdigest()
+        return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
-    def get(self, question: str, question_type: str = "",
-            options: str = "") -> Optional[str]:
+    def get_with_age(self, question: str, question_type: str = "",
+                     options: str = "") -> Optional[tuple[str, float]]:
+        """返回 (答案, 距首次写入的秒数)；未命中返回 None。"""
         key = self._generate_key(question, question_type, options)
         with self._lock:
             entry = self.cache.get(key)
-            if entry is None:
+            now = time.time()
+            if entry is None or self.expiration <= 0 or now - entry[0] >= self.expiration:
+                if entry is not None:
+                    del self.cache[key]
+                self.misses += 1
                 return None
-            ts, value = entry
-            if self.expiration <= 0:
-                del self.cache[key]
-                return None
-            if time.time() - ts < self.expiration:
-                self.cache[key] = (time.time(), value)
-                return value
-            del self.cache[key]
-            return None
+            _, value, created = entry
+            self.cache[key] = (now, value, created)
+            self.cache.move_to_end(key)
+            self.hits += 1
+            return value, max(0.0, now - created)
+
+    def get(self, question: str, question_type: str = "",
+            options: str = "") -> Optional[str]:
+        result = self.get_with_age(question, question_type, options)
+        return result[0] if result is not None else None
 
     def set(self, question: str, answer: str, question_type: str = "",
             options: str = "") -> None:
@@ -57,9 +72,14 @@ class SimpleCache:
             self.remove_expired()
             if self.expiration <= 0:
                 return
-            if key not in self.cache and len(self.cache) >= self.max_size:
+            now = time.time()
+            if key in self.cache:
+                self.cache[key] = (now, answer, self.cache[key][2])
+                self.cache.move_to_end(key)
+                return
+            while len(self.cache) >= self.max_size:
                 self._evict_one()
-            self.cache[key] = (time.time(), answer)
+            self.cache[key] = (now, answer, now)
 
     def clear(self) -> int:
         with self._lock:
@@ -74,15 +94,145 @@ class SimpleCache:
                 count = len(self.cache)
                 self.cache.clear()
                 return count
-            expired = [k for k, (ts, _) in self.cache.items()
-                        if now - ts >= self.expiration]
+            expired = [k for k, (ts, _value, _created) in self.cache.items()
+                       if now - ts >= self.expiration]
             for k in expired:
                 del self.cache[k]
             return len(expired)
 
     def _evict_one(self) -> None:
-        oldest = min(self.cache, key=lambda k: self.cache[k][0])
-        del self.cache[oldest]
+        self.cache.popitem(last=False)
+        self.evictions += 1
+
+    def stats(self) -> Dict[str, Any]:
+        with self._lock:
+            lookups = self.hits + self.misses
+            return {
+                'size': len(self.cache), 'max_size': self.max_size,
+                'hits': self.hits, 'misses': self.misses, 'evictions': self.evictions,
+                'hit_rate': round(self.hits / lookups, 4) if lookups else None,
+            }
+
+
+class PromptText(str):
+    """携带题型与简化版提示词的 str；_call_ai 的调用签名保持为单个参数。"""
+
+    question_type: str = ""
+    simple: Optional[str] = None
+
+    def __new__(cls, text: str, *, question_type: str = "", simple: Optional[str] = None):
+        value = super().__new__(cls, text)
+        value.question_type = question_type
+        value.simple = simple
+        return value
+
+
+class RateLimiter:
+    """按客户端的滑动窗口限流（每分钟 N 次 AI 调用），防止脚本刷爆上游费用。"""
+
+    def __init__(self, max_keys: int = 4096):
+        self._lock = threading.Lock()
+        self._events: "OrderedDict[str, deque]" = OrderedDict()
+        self._max_keys = max(1, int(max_keys))
+
+    def acquire(self, key: str, limit_per_minute: int, now: Optional[float] = None) -> tuple[bool, int]:
+        if not limit_per_minute or limit_per_minute <= 0:
+            return True, 0
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            events = self._events.get(key)
+            if events is None:
+                events = deque()
+                self._events[key] = events
+                while len(self._events) > self._max_keys:
+                    self._events.popitem(last=False)
+            self._events.move_to_end(key)
+            while events and now - events[0] >= 60:
+                events.popleft()
+            if len(events) >= limit_per_minute:
+                return False, max(1, math.ceil(60 - (now - events[0])))
+            events.append(now)
+            return True, 0
+
+    def reset(self) -> None:
+        with self._lock:
+            self._events.clear()
+
+
+class ServiceMetrics:
+    """进程内运行指标：请求量、失败分类、缓存命中、AI 重试、延迟分位与最近 1 分钟 QPS。"""
+
+    def __init__(self, window: int = 500):
+        self._lock = threading.Lock()
+        self.counters: Counter = Counter()
+        self.failures: Counter = Counter()
+        self.ai_failures: Counter = Counter()
+        self.extraction_paths: Counter = Counter()
+        self.latencies: deque = deque(maxlen=max(1, int(window)))
+        self.recent: deque = deque()
+
+    def incr(self, name: str, amount: int = 1) -> None:
+        with self._lock:
+            self.counters[name] += amount
+
+    def record_ai_failure(self, category: str) -> None:
+        with self._lock:
+            self.ai_failures[category] += 1
+
+    def record_search(self, seconds: float, error_code: Optional[str] = None, *, cached: bool = False) -> None:
+        now = time.monotonic()
+        with self._lock:
+            self.counters['search_requests'] += 1
+            if error_code:
+                self.failures[error_code] += 1
+            else:
+                self.counters['search_success'] += 1
+                if cached:
+                    self.counters['search_cached'] += 1
+            self.latencies.append(max(0.0, seconds))
+            self.recent.append(now)
+            while self.recent and now - self.recent[0] > 60:
+                self.recent.popleft()
+
+    def record_extraction_path(self, path: str) -> None:
+        with self._lock:
+            self.extraction_paths[path] += 1
+
+    @staticmethod
+    def _percentile(values: list, fraction: float) -> Optional[float]:
+        if not values:
+            return None
+        ordered = sorted(values)
+        index = min(len(ordered) - 1, max(0, math.ceil(fraction * len(ordered)) - 1))
+        return round(ordered[index] * 1000, 1)
+
+    def snapshot(self) -> Dict[str, Any]:
+        now = time.monotonic()
+        with self._lock:
+            while self.recent and now - self.recent[0] > 60:
+                self.recent.popleft()
+            latencies = list(self.latencies)
+            ai_calls = self.counters['ai_calls']
+            total = self.counters['search_requests']
+            return {
+                'search_requests': total,
+                'search_success': self.counters['search_success'],
+                'search_cached': self.counters['search_cached'],
+                'failures': dict(self.failures),
+                'failure_rate': round(sum(self.failures.values()) / total, 4) if total else None,
+                'ai_calls': ai_calls,
+                'ai_retries': self.counters['ai_retries'],
+                'retry_rate': round(self.counters['ai_retries'] / ai_calls, 4) if ai_calls else None,
+                'ai_failures': dict(self.ai_failures),
+                'extraction_paths': dict(self.extraction_paths),
+                'qps_1m': round(len(self.recent) / 60, 3),
+                'latency_ms': {
+                    'p50': self._percentile(latencies, 0.5),
+                    'p95': self._percentile(latencies, 0.95),
+                    'max': round(max(latencies) * 1000, 1) if latencies else None,
+                    'samples': len(latencies),
+                },
+            }
 
 
 def format_answer_for_ocs(question: str, answer: str) -> Dict[str, Any]:
@@ -106,8 +256,16 @@ def normalize_options(options: Any) -> str:
 
 
 def _normalize_option_lines(text: str) -> str:
+    # 只统一换行、去掉空行与首尾空白；不删 HTML 标记和实体，“<p>”这类字面选项要原样保留。
     lines = [line.strip() for line in text.splitlines()]
     return "\n".join(line for line in lines if line)
+
+
+def count_options(options: str) -> int:
+    """带字母标号的选项按标号行计数（长选项可能折成多行），没有标号时按非空行计数。"""
+    lines = [line for line in (options or "").splitlines() if line.strip()]
+    labeled = sum(1 for line in lines if _OPTION_LINE_RE.match(line))
+    return labeled or len(lines)
 
 
 _OPTION_LABEL_KEYS = ("label", "key", "id", "option", "letter", "no", "index")
@@ -201,42 +359,105 @@ def normalize_question_type(question_type: Any) -> str:
     return aliases.get(normalized, normalized)
 
 
+KNOWN_QUESTION_TYPES = frozenset({"single", "multiple", "judgement", "completion", "short-answer"})
+_TYPE_LABELS = {
+    "single": "【单选题】", "multiple": "【多选题】",
+    "judgement": "【判断题】", "completion": "【填空题】",
+    "short-answer": "【简答题】",
+}
+
+
+# 定界标记的各种变体（空格、全角尖括号/斜杠）；题干里伪造的 <选项> 块也要去掉。
+_DELIMITER_TAG_RE = re.compile(r"[<＜]\s*[/／]?\s*(?:题干|选项)\s*[>＞]")
+
+
+def _quote_block(tag: str, text: str) -> str:
+    # 题目数据放进定界块，并去掉内容中伪造的定界标记，防止“越狱”到指令区。
+    safe = _DELIMITER_TAG_RE.sub("", text)
+    return f"<{tag}>\n{safe}\n</{tag}>"
+
+
 def parse_question_and_options(question: str, options: str,
                                question_type: str) -> str:
-    """构建完整 AI 提示词：题型标签 + 题干 + 选项 + 严格指令。
+    """构建完整 AI 提示词：题型标签 + 定界的题干/选项 + 严格指令。
 
-    v2026.6.10.1739 增强：
-    - 指令前加「联网搜索」暗示，让 AI 更认真对待
+    - 题干和选项放在 <题干>/<选项> 定界块中；系统提示要求照常完成题目本身的作答要求，
+      但不执行其中改变身份、忽略规则或改变输出格式的语句
     - 强调选项顺序可能不同，必须逐项比对
     - 填空题缺少选项时不再追加空选项段
     """
     parts = []
 
-    # 题型标签
-    type_label = {
-        "single": "【单选题】", "multiple": "【多选题】",
-        "judgement": "【判断题】", "completion": "【填空题】",
-        "short-answer": "【简答题】",
-    }.get(question_type, "【题目】")
+    type_label = _TYPE_LABELS.get(question_type, "【题目】")
+    parts.append(f"{type_label}\n{_quote_block('题干', question)}")
 
-    parts.append(f"{type_label}{question}")
-
-    # 选项核心上下文
     if options:
-        if question_type == "single":
-            parts.append(f"选项:\n{options}")
-        elif question_type == "multiple":
-            parts.append(f"选项（可多选）:\n{options}")
-        elif question_type == "judgement":
-            parts.append(f"选项:\n{options}")
-        else:
-            parts.append(f"选项:\n{options}")
+        heading = "选项（可多选）:" if question_type == "multiple" else "选项:"
+        parts.append(f"{heading}\n{_quote_block('选项', options)}")
 
-    # 严格指令
-    instructions = _build_instructions(question_type, bool(options))
-    parts.append(instructions)
+    parts.append(_build_instructions(question_type, bool(options)))
 
     return "\n\n".join(parts)
+
+
+def build_simple_prompt(question: str, options: str, question_type: str) -> str:
+    """重试用的极简提示：保留完整题干与全部选项，只去掉冗长指令。"""
+    parts = [f"{_TYPE_LABELS.get(question_type, '【题目】')}\n{_quote_block('题干', question)}"]
+    if options:
+        parts.append(f"选项:\n{_quote_block('选项', options)}")
+    parts.append("只输出最终答案。")
+    return "\n\n".join(parts)
+
+
+# 系统提示要求无法确定时只输出“无法确定”，这类完整回答在任何题型都视为拒答；
+# 其余说法只在选择/判断题（含未标题型但带选项的题）中视为拒答（填空、简答的答案本身可能就是“不知道”“unknown”）。
+_REFUSAL_EXACT = frozenset({"无法确定", "cannot determine"})
+_CHOICE_REFUSAL_EXACT = frozenset({
+    "无法判断", "无法回答", "无法得出答案", "不确定", "不知道", "我不知道", "i don't know", "i do not know", "not sure",
+})
+_REFUSAL_PREFIXES = ("无法确定", "抱歉", "对不起", "作为一个ai", "作为ai", "作为 ai", "i'm sorry", "sorry,")
+_CHOICE_QUESTION_TYPES = frozenset({"single", "multiple", "judgement"})
+_REFUSAL_STRIP_RE = re.compile(r"[\s。．.!！?？,，;；:：「」“”\"'（）()]+")
+_REFUSAL_NORMALIZED = frozenset(_REFUSAL_STRIP_RE.sub("", item) for item in _REFUSAL_EXACT)
+_CHOICE_REFUSAL_NORMALIZED = frozenset(_REFUSAL_STRIP_RE.sub("", item) for item in _CHOICE_REFUSAL_EXACT)
+
+
+def _option_answer_forms(options: str) -> set:
+    """选项文本的比较形式；没有字母标号时整行就是选项。"""
+    labeled = _parse_option_texts(options)
+    values = labeled.values() if labeled else (line.strip() for line in (options or "").splitlines())
+    return {_REFUSAL_STRIP_RE.sub("", value.lower()) for value in values if value}
+
+
+def looks_like_refusal(answer: str, question_type: str = "", options: str = "") -> bool:
+    text = (answer or "").strip().lower()
+    if not text:
+        return True
+    # 答案本身就是某个选项（如语文题选项“抱歉，我来晚了”）时不算拒答。
+    option_forms = _option_answer_forms(options)
+    parts = [_REFUSAL_STRIP_RE.sub("", part) for part in text.split('#') if part.strip()]
+    if option_forms and parts and all(part in option_forms for part in parts):
+        return False
+    normalized = _REFUSAL_STRIP_RE.sub("", text)
+    if normalized in _REFUSAL_NORMALIZED:
+        return True
+    # 未标题型但带选项的题目按选择题处理。
+    if question_type not in _CHOICE_QUESTION_TYPES and (question_type or not options):
+        return False
+    return normalized in _CHOICE_REFUSAL_NORMALIZED or text.startswith(_REFUSAL_PREFIXES)
+
+
+# 只作告警统计，不拦截；“扮演”“你现在是”在情景题里很常见，不再计入。
+_INJECTION_RE = re.compile(
+    r"忽略(?:以上|之前|前面|上述)|无视(?:以上|之前)|系统提示|system\s*prompt|"
+    r"ignore\s+(?:all\s+)?(?:previous|above)|disregard\s+(?:all\s+)?(?:previous|above)|"
+    r"[<＜]\s*[/／]?\s*(?:题干|选项)\s*[>＞]",
+    re.I,
+)
+
+
+def looks_like_prompt_injection(*texts: str) -> bool:
+    return any(_INJECTION_RE.search(text or "") for text in texts)
 
 
 def _build_instructions(question_type: str, has_options: bool) -> str:
@@ -297,16 +518,24 @@ def _strip_option_letter_prefix(text: str) -> str:
     return _OPTION_LETTER_PREFIX_RE.sub('', text).strip()
 
 
-def extract_answer(ai_response: str, question_type: str, options: str = "") -> str:
+def extract_answer(ai_response: str, question_type: str, options: str = "",
+                   trace: Optional[list] = None) -> str:
     """从 AI 响应中提取并清洗答案。
 
     流程：去前缀 -> 去尾标点 -> 按题型处理
     - 多选： # 分隔标准化 + 字母检测
     - 判断：中英文统一为「正确」「错误」
     - 单选：去除选项字母前缀
+
+    trace 非空时追加命中的处理路径，用于统计启发式规则的实际效果。
     """
+    def mark(path: str) -> None:
+        if trace is not None:
+            trace.append(path)
+
     text = ai_response.strip()
     if not text:
+        mark("empty")
         return text
 
     cleaned = _ANSWER_PREFIX_RE.sub('', text).strip()
@@ -318,16 +547,22 @@ def extract_answer(ai_response: str, question_type: str, options: str = "") -> s
     if question_type == "multiple":
         exact_options = _match_complete_option_answers(cleaned, options)
         if exact_options is not None:
+            mark("multiple_option_text")
             return exact_options
+        mark("multiple_letters_or_split")
         return _map_answer_letters_to_options(
             _process_multiple_answer(cleaned),
             options,
         )
     elif question_type == "judgement":
+        mark("judgement")
         return _process_judgement_answer(cleaned)
     elif question_type == "single":
-        return _map_single_answer_to_option(cleaned, options)
+        mapped = _map_single_answer_to_option(cleaned, options)
+        mark("single_option" if mapped in _parse_option_texts(options).values() else "single_free_text")
+        return mapped
 
+    mark("free_text")
     return cleaned
 
 

@@ -12,6 +12,8 @@ from typing import Optional, Dict
 
 import logging
 
+from provider_clients import sanitize_model_name
+
 logger = logging.getLogger(__name__)
 
 # 需要从 settings.json env 中提取的所有字段
@@ -32,17 +34,31 @@ _ENV_KEYS = (
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
 )
 
-_SENSITIVE_ENV_KEY_PARTS = ("TOKEN", "API_KEY", "SECRET", "PASSWORD")
+# 仪表盘/接口展示配置时需要隐藏值的键名片段（与 app.py 共用同一张表）。
+SENSITIVE_KEY_TERMS = (
+    "TOKEN", "KEY", "SECRET", "PASSWORD", "PASS", "AUTH", "CREDENTIAL",
+    "PRIVATE", "BEARER", "COOKIE", "SESSION", "SIGNATURE", "CERT",
+)
+_MAX_DISPLAY_VALUE_LENGTH = 200
+
+
+def is_sensitive_key(key: str) -> bool:
+    upper_key = str(key).upper()
+    return any(part in upper_key for part in SENSITIVE_KEY_TERMS)
 
 
 def _is_sensitive_env_key(key: str) -> bool:
-    upper_key = key.upper()
-    return any(part in upper_key for part in _SENSITIVE_ENV_KEY_PARTS)
+    return is_sensitive_key(key)
+
+
+def _display_value(value):
+    text = str(value)
+    return text if len(text) <= _MAX_DISPLAY_VALUE_LENGTH else text[:_MAX_DISPLAY_VALUE_LENGTH] + "…"
 
 
 def sanitize_env_for_display(env: Dict[str, str]) -> Dict[str, str]:
     return {
-        key: "<hidden>" if _is_sensitive_env_key(key) else value
+        key: "<hidden>" if is_sensitive_key(key) else _display_value(value)
         for key, value in env.items()
     }
 
@@ -53,7 +69,7 @@ def _sanitize_model_name(model: str) -> str:
     DeepSeek API 不识别带方括号后缀的模型名。
     例如：'deepseek-v4-pro[1M]' → 'deepseek-v4-pro'
     """
-    return re.sub(r"\[\d+K?M?\]", "", model).strip()
+    return sanitize_model_name(model)
 
 
 def _find_settings_path() -> Optional[Path]:
@@ -83,18 +99,21 @@ def extract_all_env(settings: dict) -> Dict[str, str]:
     return sanitize_env_for_display(result)
 
 
-def _load_full_config(config: dict) -> dict:
+class CcswitchUnreadableError(RuntimeError):
+    """settings.json 存在但暂时无法读取或解析（常见于 cc-switch 正在写入）。"""
+
+
+def _load_full_config(config: dict, settings: Optional[dict] = None) -> dict:
     """为配置字典附加完整 env 信息（extract_all_env）。
 
-    在 get_ccswitch_config() 和 reload_ccswitch_config() 中复用，
-    确保启动和重载两种场景都获取完整 env。
+    直接复用已解析的 settings，避免二次读取时撞上 cc-switch 半写的文件。
     """
-    settings_path = Path(config["source_file"])
-    try:
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        config["extra_env"] = extract_all_env(settings)
-    except Exception:
-        config["extra_env"] = {}
+    if settings is None:
+        try:
+            settings = json.loads(Path(config["source_file"]).read_text(encoding="utf-8"))
+        except Exception:
+            settings = {}
+    config["extra_env"] = extract_all_env(settings)
     return config
 
 
@@ -102,7 +121,7 @@ def _text_value(value) -> str:
     return value.strip() if isinstance(value, str) else ''
 
 
-def get_ccswitch_config(settings_path: Optional[Path] = None) -> Optional[Dict[str, str]]:
+def get_ccswitch_config(settings_path: Optional[Path] = None, *, strict: bool = False) -> Optional[Dict[str, str]]:
     """
     从 Claude Code settings.json 读取 API 配置。
 
@@ -112,6 +131,8 @@ def get_ccswitch_config(settings_path: Optional[Path] = None) -> Optional[Dict[s
 
     返回 None 表示未检测到有效配置，应回退到 .env。
     返回 Dict 包含 api_key, base_url, model, meta 四个字段。
+    strict=True 时，文件存在但读取/解析失败会抛出 CcswitchUnreadableError，
+    供运行时重载区分“没有 ccswitch 配置”和“配置正在写入”。
 
     模型选择优先级（含净化）：
     1. env.ANTHROPIC_MODEL — 通用模型名（DeepSeek 直连模式优先使用）
@@ -130,7 +151,9 @@ def get_ccswitch_config(settings_path: Optional[Path] = None) -> Optional[Dict[s
         content = settings_path.read_text(encoding="utf-8")
         settings = json.loads(content)
     except (json.JSONDecodeError, OSError, UnicodeError) as e:
-        logger.warning(f"读取 settings.json 失败: {e}")
+        logger.warning("读取 settings.json 失败: %s", type(e).__name__)
+        if strict:
+            raise CcswitchUnreadableError("settings.json 暂时无法读取或解析") from None
         return None
 
     if not isinstance(settings, dict):
@@ -173,7 +196,7 @@ def get_ccswitch_config(settings_path: Optional[Path] = None) -> Optional[Dict[s
         "is_proxy": is_local,
         "source_file": str(settings_path),
     }
-    return _load_full_config(config)
+    return _load_full_config(config, settings)
 
 
 def _resolve_model(settings: dict, env: dict) -> str:
@@ -220,10 +243,10 @@ def _resolve_model(settings: dict, env: dict) -> str:
     return "deepseek-v4-pro"
 
 
-def reload_ccswitch_config() -> Optional[Dict[str, str]]:
+def reload_ccswitch_config(*, strict: bool = False) -> Optional[Dict[str, str]]:
     """运行时重新加载 ccswitch 配置（用于 /api/config/reload 端点）。
 
-    与 get_ccswitch_config() 的功能完全相同，都会附加完整 env。
-    保留此函数作为语义化入口，方便未来扩展（如添加缓存失效逻辑）。
+    strict=True 时，文件存在但暂不可读会抛出 CcswitchUnreadableError，
+    调用方据此保留当前配置，而不是误回退到 .env。
     """
-    return get_ccswitch_config()
+    return get_ccswitch_config(strict=strict)

@@ -8,7 +8,9 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 import webbrowser
 
-from portable_settings import Preferences, ProfileStore
+from portable_settings import FIELD_LABELS, PreferenceError, Preferences, ProfileStore
+
+CLIPBOARD_CLEAR_MS = 60000
 
 
 class PortableWindow:
@@ -18,6 +20,10 @@ class PortableWindow:
         self.busy = False
         self.closing = False
         self.variables = {}
+        self.widgets = {}
+        self._generation = 0
+        self._cancellable = False
+        self._clipboard_secret = None
         self.root.title("EduBrain 便携答题服务")
         self.root.geometry("960x740")
         self.root.minsize(760, 600)
@@ -57,6 +63,7 @@ class PortableWindow:
         else:
             widget = ttk.Entry(parent, textvariable=variable, show="*" if secret else "")
         widget.grid(row=row, column=1, sticky="ew", pady=4)
+        self.widgets[name] = widget
         return widget
 
     def _configuration(self, page):
@@ -74,15 +81,16 @@ class PortableWindow:
         advanced = ttk.Frame(page)
         advanced.grid(row=7, column=0, columnspan=2, sticky="ew", pady=6)
         for i, (name, label, value) in enumerate((
-            ("max_tokens", "输出上限", prefs.max_tokens), ("temperature", "温度", prefs.temperature),
+            ("max_tokens", "输出上限", prefs.max_tokens), ("temperature", "温度（选择/判断/填空最高 0.3）", prefs.temperature),
             ("timeout", "单次超时秒", prefs.timeout), ("max_retries", "重试次数", prefs.max_retries),
             ("cache_expiration", "缓存有效秒", prefs.cache_expiration),
         )):
             ttk.Label(advanced, text=label).grid(row=i // 3 * 2, column=i % 3, sticky="w")
             variable = tk.StringVar(value=str(value))
             self.variables[name] = variable
-            ttk.Entry(advanced, textvariable=variable, width=18).grid(row=i // 3 * 2 + 1, column=i % 3,
-                                                                   sticky="ew", padx=(0, 12), pady=(2, 6))
+            entry = ttk.Entry(advanced, textvariable=variable, width=18)
+            entry.grid(row=i // 3 * 2 + 1, column=i % 3, sticky="ew", padx=(0, 12), pady=(2, 6))
+            self.widgets[name] = entry
             advanced.columnconfigure(i % 3, weight=1)
         self.cache_enabled = tk.BooleanVar(value=prefs.cache_enabled)
         ttk.Checkbutton(page, text="启用本次运行的答案缓存", variable=self.cache_enabled).grid(row=8, column=0, columnspan=2, sticky="w")
@@ -92,7 +100,8 @@ class PortableWindow:
         buttons.grid(row=10, column=0, columnspan=2, sticky="w", pady=12)
         for text, command in (("应用到本次运行", self.apply), ("保存便携配置", self.save),
                               ("解锁已保存密钥", self.unlock), ("打开网页", self.open_browser),
-                              ("复制接入配置", self.copy_config), ("复制访问口令", self.copy_access_token)):
+                              ("复制接入配置", self.copy_config), ("复制访问口令", self.copy_access_token),
+                              ("生成新口令", self.regenerate_access_token)):
             ttk.Button(buttons, text=text, command=command).pack(side="left", padx=(0, 6))
         ttk.Label(page, text="基础地址通常包含 /v1；程序只追加该协议的接口路径。应用配置不会发送模型请求，也不代表账号可用。\n端口修改需保存后重启。网页是可选入口；基本问答可以直接在本窗口完成。",
                   wraplength=840).grid(row=11, column=0, columnspan=2, sticky="w")
@@ -111,6 +120,7 @@ class PortableWindow:
         ttk.Combobox(controls, textvariable=self.question_type, state="readonly", width=18,
                      values=("single", "multiple", "judgement", "completion", "short-answer")).pack(side="left", padx=8)
         ttk.Button(controls, text="提交问答", command=self.ask).pack(side="left")
+        ttk.Button(controls, text="取消等待", command=self.cancel_wait).pack(side="left", padx=8)
         ttk.Label(page, text="回答与请求结果").pack(anchor="w")
         self.answer = tk.Text(page, height=10, wrap="word", state="disabled", font=("Microsoft YaHei UI", 10))
         self.answer.pack(fill="both", expand=True, pady=(4, 0))
@@ -137,7 +147,10 @@ class PortableWindow:
             "默认不保存密钥。选择密码加密保存后，可在另一台电脑用同一密码解锁；"
             "密码不随包保存，遗忘后无法恢复。普通连接参数仍以明文保存，请勿把密钥放在地址或模型名称里。\n\n"
             "本地访问口令用于保护本机答题接口。未加密保存时，每次启动会生成新的口令，"
-            "接入脚本需要重新复制配置。复制的接入配置包含该口令，不要公开分享。\n\n"
+            "接入脚本需要重新复制配置。复制的接入配置把口令放在 headers（请求头）里，不出现在网址中；"
+            "它仍然是凭据，不要公开分享。复制到剪贴板的口令或配置会在 60 秒后或关闭窗口时自动清除；"
+            "若开启了 Windows 剪贴板历史（Win+V），历史里的副本需要你手动删除。"
+            "怀疑泄露时点击“生成新口令”，再点“应用到本次运行”，旧口令立即失效。\n\n"
             "关闭窗口会停止本地服务。退出完成后再拔出 U 盘。"
             "程序未进行商业代码签名；系统可能提示来源未知。不要关闭系统安全防护。\n\n"
             "‘运行时已就绪’仅表示配置已装载；以一次实际问答成功判断模型服务是否可用。"
@@ -150,33 +163,63 @@ class PortableWindow:
     def _preferences(self):
         values = {name: variable.get().strip() for name, variable in self.variables.items()
                   if name not in ("api_key", "access_token")}
-        try:
-            for name in ("port", "max_tokens", "max_retries", "cache_expiration"):
-                values[name] = int(values[name])
-            for name in ("temperature", "timeout"):
-                values[name] = float(values[name])
-        except ValueError:
-            raise ValueError("端口、输出上限、重试、缓存时间应为整数；温度与超时应为有效数字。") from None
+        for name, kind in (("port", int), ("max_tokens", int), ("max_retries", int), ("cache_expiration", int),
+                           ("temperature", float), ("timeout", float)):
+            try:
+                values[name] = kind(values[name])
+            except ValueError:
+                expected = "整数" if kind is int else "数字"
+                raise PreferenceError(name, f"{FIELD_LABELS[name]}应为有效{expected}。") from None
         values["cache_enabled"] = self.cache_enabled.get()
         return Preferences.from_mapping(values)
 
-    def _run(self, message, work, callback=None):
+    def _focus_field(self, field):
+        widget = self.widgets.get(field)
+        if widget is None:
+            return
+        self.notebook.select(0)
+        widget.focus_set()
+        try:
+            widget.selection_range(0, "end")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _run(self, message, work, callback=None, *, cancellable=False):
         if self.busy or self.closing:
             self.status.set("当前操作尚未结束，请稍候。")
             return
         self.busy = True
+        self._cancellable = cancellable
+        self._generation += 1
+        generation = self._generation
         self.status.set(message)
         def run():
             try:
-                self.results.put((True, work(), callback))
+                self.results.put((True, work(), callback, generation))
             except Exception as exc:
-                self.results.put((False, str(exc), None))
+                self.results.put((False, str(exc), None, generation))
         threading.Thread(target=run, daemon=True, name="portable-ui-work").start()
+
+    def cancel_wait(self):
+        """放弃等待问答：界面立即可用，后台请求结束后结果被丢弃。
+
+        保存、应用、解锁、清缓存必须等它们完成，否则界面会以为没做而后台其实已经生效。
+        """
+        if not self.busy or self.closing:
+            return
+        if not self._cancellable:
+            self.status.set("只有问答可以取消等待；保存、应用配置等操作请等待完成。")
+            return
+        self._generation += 1
+        self.busy = False
+        self.status.set("已取消等待；后台请求结束后其结果会被丢弃（模型侧可能仍会计费）。")
 
     def _drain(self):
         try:
             while True:
-                successful, result, callback = self.results.get_nowait()
+                successful, result, callback, generation = self.results.get_nowait()
+                if generation != self._generation:
+                    continue
                 self.busy = False
                 if self.closing:
                     continue
@@ -198,6 +241,10 @@ class PortableWindow:
             return
         try:
             work()
+        except PreferenceError as exc:
+            self._focus_field(exc.field)
+            self.status.set("请修改高亮的输入项：" + str(exc))
+            messagebox.showerror("请检查设置", str(exc), parent=self.root)
         except (ValueError, OSError, RuntimeError) as exc:
             messagebox.showerror("请检查设置", str(exc), parent=self.root)
 
@@ -256,7 +303,8 @@ class PortableWindow:
             messagebox.showwarning("缺少题目", "请先输入题目。", parent=self.root)
             return
         self._run("正在等待模型回答，请勿重复提交", lambda: self.controller.ask(question, options, question_type),
-                  lambda result: self._replace_text(self.answer, json.dumps(result, ensure_ascii=False, indent=2)))
+                  lambda result: self._replace_text(self.answer, json.dumps(result, ensure_ascii=False, indent=2)),
+                  cancellable=True)
 
     def clear_cache(self):
         if self.busy or self.closing:
@@ -264,12 +312,36 @@ class PortableWindow:
         if messagebox.askyesno("清空缓存", "仅清空当前运行的答案缓存，是否继续？", parent=self.root):
             self._run("正在清空答案缓存", self.controller.clear_cache)
 
+    def _copy_secret(self, value):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(value)
+        self._clipboard_secret = value
+        # 公共电脑上剪贴板可被其它程序读取：到时仍未被覆盖就清空；关闭窗口时也会清空。
+        self.root.after(CLIPBOARD_CLEAR_MS, lambda: self._clear_clipboard_if(value))
+
+    def _clear_clipboard_if(self, value):
+        if self.closing:
+            return
+        self._clear_copied_secret(value)
+
+    def _clear_copied_secret(self, value=None):
+        value = self._clipboard_secret if value is None else value
+        if not value:
+            return
+        try:
+            if self.root.clipboard_get() == value:
+                self.root.clipboard_clear()
+        except tk.TclError:
+            pass
+        if value == self._clipboard_secret:
+            self._clipboard_secret = None
+
     def copy_config(self):
         if self.closing:
             return
-        self.root.clipboard_clear()
-        self.root.clipboard_append(json.dumps(self.controller.integration_config(), ensure_ascii=False, indent=2))
-        self.status.set("接入参数已复制，包含本地访问口令。请按接入工具要求核对字段，不要公开分享。")
+        self._copy_secret(json.dumps(self.controller.integration_config(), ensure_ascii=False, indent=2))
+        self.status.set("接入参数已复制（口令在 headers 中），60 秒后或关闭窗口时从剪贴板清除"
+                        "（Win+V 剪贴板历史里的副本需手动删除）。请勿公开分享。")
 
     def open_browser(self):
         if not webbrowser.open(self.controller.url):
@@ -278,9 +350,15 @@ class PortableWindow:
     def copy_access_token(self):
         if self.closing:
             return
-        self.root.clipboard_clear()
-        self.root.clipboard_append(self.controller.access_token)
-        self.status.set("本次运行的访问口令已复制，可粘贴到网页的访问令牌框。它不是模型 API Key，请勿公开分享。")
+        self._copy_secret(self.controller.access_token)
+        self.status.set("本次运行的访问口令已复制，60 秒后或关闭窗口时从剪贴板清除"
+                        "（Win+V 剪贴板历史里的副本需手动删除）。它不是模型 API Key，请勿公开分享。")
+
+    def regenerate_access_token(self):
+        if self.closing:
+            return
+        self.variables["access_token"].set(self.controller.generate_access_token())
+        self.status.set("已生成新口令：点击“应用到本次运行”后生效，旧口令和已登录的网页会话随即失效。")
 
     @staticmethod
     def _replace_text(widget, value):
@@ -294,6 +372,8 @@ class PortableWindow:
             return
         if self.busy and not messagebox.askyesno("退出", "仍有操作进行中。退出会中断等待，是否继续？", parent=self.root):
             return
+        # 退出后 Tk 不再管理剪贴板，复制过的口令要在退出前清掉。
+        self._clear_copied_secret()
         self.closing = True
         self.status.set("正在停止本地服务，请稍候再拔出 U 盘。")
         finished = threading.Event()

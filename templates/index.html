@@ -89,6 +89,9 @@
     "url": "http://localhost:5000/api/search",
     "method": "get",
     "contentType": "json",
+    "headers": {
+      "X-Access-Token": "YOUR_ACCESS_TOKEN"
+    },
     "data": {
       "title": "${title}",
       "type": "${type}",
@@ -97,6 +100,7 @@
     "handler": "return (res)=> res.code === 1 ? [res.question, res.answer] : [res.msg, undefined]"
   }
 ]</code></pre>
+                        <p class="small text-muted mt-2 mb-0">启用 ACCESS_TOKEN 时把 YOUR_ACCESS_TOKEN 换成你的令牌（请求头只能用英文字母、数字和符号）；未启用时删除整个 headers。</p>
                     </div>
                 </div>
             </div>
@@ -173,16 +177,17 @@
             const timeout = setTimeout(() => controller.abort(), 120000);
 
             try {
+                // 令牌走请求头，不与题目放在同一个 JSON 里；非 ASCII 令牌无法放进请求头时才回退到请求体。
+                const token = accessInput.value || '';
+                const headers = {'Content-Type': 'application/json'};
+                const payload = {title: question, type: questionType || undefined, options: options || undefined};
+                if (token && /^[!-~]+$/.test(token)) headers['X-Access-Token'] = token;
+                else if (token) payload.token = token;
                 const response = await fetch('/api/search', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers,
                     signal: controller.signal,
-                    body: JSON.stringify({
-                        token: accessInput.value || undefined,
-                        title: question,
-                        type: questionType || undefined,
-                        options: options || undefined
-                    })
+                    body: JSON.stringify(payload)
                 });
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.msg || '请求失败，请检查服务状态或访问令牌');

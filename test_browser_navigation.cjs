@@ -21,7 +21,7 @@ function fixture(fetch) {
             parentElement: {before(...children) { for (const child of children) if (child.id) nodes.set(child.id, child); }}
         };
     }
-    for (const id of ['search-btn', 'dashboard-link', 'result', 'answer-content', 'ocs-config']) nodes.set(id, node());
+    for (const id of ['search-btn', 'dashboard-link', 'result', 'answer-content', 'ocs-config', 'question', 'question-type', 'options', 'loading']) nodes.set(id, node());
     const context = vm.createContext({
         document: {createElement: node, createTextNode: text => ({text}), getElementById: id => nodes.get(id)},
         window: {location: {host: '127.0.0.1:5000', protocol: 'http:', assign: url => navigations.push(url)}},
@@ -65,5 +65,18 @@ function fixture(fetch) {
         assert.equal(page.timers.size, 0);
         assert.match(page.nodes.get('answer-content').innerHTML, /超时/);
     }
-    console.log('Browser navigation: session POST, secret-free URL, error escaping, duplicate guard and request/body timeout checks passed.');
+    // 搜索：可见 ASCII 令牌只走 X-Access-Token 请求头，不与题目放进同一个 JSON；其它字符才回退到请求体。
+    for (const [token, header, bodyToken] of [['SYNTHETIC_ASCII_TOKEN', 'SYNTHETIC_ASCII_TOKEN', undefined], ['中文口令', undefined, '中文口令']]) {
+        let searchRequest;
+        page = fixture(async (url, options) => { searchRequest = {url, options}; return {ok: true, json: async () => ({code: 1, question: 'q', answer: 'a'})}; });
+        page.nodes.get('access-token').value = token;
+        page.nodes.get('question').value = 'synthetic question';
+        await page.nodes.get('search-btn').listeners.click();
+        assert.equal(searchRequest.url, '/api/search');
+        assert.equal(searchRequest.options.headers['X-Access-Token'], header);
+        const body = JSON.parse(searchRequest.options.body);
+        assert.equal(body.token, bodyToken);
+        assert.equal(body.title, 'synthetic question');
+    }
+    console.log('Browser navigation: session POST, secret-free URL, header-only search token, error escaping, duplicate guard and request/body timeout checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

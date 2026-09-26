@@ -5,6 +5,9 @@
     "url": "http://localhost:5000/api/search",
     "method": "get",
     "contentType": "json",
+    "headers": {
+      "X-Access-Token": "your_access_token"
+    },
     "data": {
       "title": "${title}",
       "type": "${type}",

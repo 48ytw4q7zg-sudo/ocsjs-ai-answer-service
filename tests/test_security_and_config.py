@@ -71,7 +71,7 @@ class ConfigAndSecurityTests(unittest.TestCase):
         try:
             missing_token = app_module.app.test_client().get("/dashboard")
             valid_token = app_module.app.test_client().get(
-                "/dashboard", query_string={"token": "dashboard-token"}
+                "/dashboard", query_string={"token": "dashboard-token"}, follow_redirects=True
             )
         finally:
             app_module.Config.ACCESS_TOKEN = original_token

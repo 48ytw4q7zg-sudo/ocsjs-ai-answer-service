@@ -9,9 +9,27 @@ import certifi
 import httpx
 
 
+# 模型名后缀净化规则（表驱动）：去掉 ccswitch/客户端附加的上下文长度标记，如 [1M]、[200K]、[128k]。
+MODEL_SUFFIX_PATTERNS = (
+    re.compile(r'\s*\[\d+(?:\.\d+)?\s*[KM]?\]', re.I),
+)
+
+
+def sanitize_model_name(model):
+    """返回服务商可识别的模型名；原始值由调用方另行记录（raw_model）。"""
+    cleaned = str(model or '')
+    for pattern in MODEL_SUFFIX_PATTERNS:
+        cleaned = pattern.sub('', cleaned)
+    return cleaned.strip()
+
+
 class IncompleteResponseError(RuntimeError):
     def __init__(self):
         super().__init__("Provider response was incomplete")
+
+
+class ProviderResponseError(anthropic.APIConnectionError):
+    """上游返回了无法解析的响应（非 JSON 或结构不对），多半是接口地址或协议选错；重试没有意义。"""
 
 
 def require_final_state(state, allowed):
@@ -58,7 +76,7 @@ class OpenAICompatibleClient:
         return self
 
     def create(self, *, model, max_tokens, temperature, system, messages):
-        model = re.sub(r'\[\d+[KM]?\]$', '', model, flags=re.I)
+        model = sanitize_model_name(model)
         if self.protocol == 'openai_responses':
             url = self.base_url + '/responses'
             payload = {'model': model, 'input': messages, 'instructions': system,
@@ -101,7 +119,7 @@ class OpenAICompatibleClient:
                 if attempt == self.max_retries:
                     raise error from exc
             except ValueError as exc:
-                raise anthropic.APIConnectionError(message='Provider returned an invalid response', request=request) from exc
+                raise ProviderResponseError(message='Provider returned an invalid response', request=request) from exc
             time.sleep(min(0.5 * 2 ** attempt, 4))
         raise anthropic.APIConnectionError(message='Provider request exhausted retries', request=request)
 

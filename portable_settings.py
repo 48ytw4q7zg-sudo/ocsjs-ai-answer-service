@@ -15,6 +15,21 @@ from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 _ASSOCIATED_DATA = b'EduBrain portable profile v1'
 _MAX_PROFILE_BYTES = 65536
 
+FIELD_LABELS = {
+    'protocol': '接口协议', 'base_url': '接口基础地址', 'model': '模型标识', 'port': '本地端口',
+    'max_tokens': '输出上限', 'max_retries': '重试次数', 'cache_expiration': '缓存有效秒',
+    'temperature': '温度', 'timeout': '单次超时秒', 'cache_enabled': '答案缓存开关',
+    'reasoning_effort': '推理强度',
+}
+
+
+class PreferenceError(ValueError):
+    """带字段名的校验错误，界面据此定位并高亮对应输入框。"""
+
+    def __init__(self, field, message):
+        super().__init__(message)
+        self.field = field
+
 
 @dataclass
 class Preferences:
@@ -41,9 +56,9 @@ class Preferences:
 
     def validate(self):
         if self.protocol not in ('anthropic', 'openai_chat', 'openai_responses'):
-            raise ValueError('请选择受支持的接口格式')
+            raise PreferenceError('protocol', '请选择受支持的接口格式')
         if not isinstance(self.base_url, str) or len(self.base_url) > 2048 or any(ord(c) < 32 for c in self.base_url):
-            raise ValueError('API 地址格式无效')
+            raise PreferenceError('base_url', 'API 地址格式无效')
         try:
             url = urlsplit(self.base_url.strip())
             valid_url = url.scheme in ('http', 'https') and bool(url.hostname) and not url.username and not url.password and not url.query and not url.fragment
@@ -51,23 +66,23 @@ class Preferences:
         except ValueError:
             valid_url = False
         if not valid_url:
-            raise ValueError('请填写完整的 HTTP/HTTPS API 基础地址，不要在地址中放入密钥或查询参数')
+            raise PreferenceError('base_url', '请填写完整的 HTTP/HTTPS API 基础地址（含 http:// 或 https://），不要在地址中放入密钥或查询参数')
         self.base_url = self.base_url.strip().rstrip('/')
         if not isinstance(self.model, str) or not self.model.strip() or len(self.model) > 200 or any(ord(c) < 32 for c in self.model):
-            raise ValueError('模型名称无效')
+            raise PreferenceError('model', '模型标识不能为空、不能超过 200 个字符，也不能包含控制字符')
         self.model = self.model.strip()
         for name, lower, upper in (('port',0,65535),('max_tokens',1,131072),('max_retries',0,10),('cache_expiration',60,31536000)):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not lower <= value <= upper:
-                raise ValueError(f'{name} 超出允许范围')
+                raise PreferenceError(name, f'{FIELD_LABELS[name]}（{name}）必须是 {lower}–{upper} 之间的整数')
         for name, lower, upper in (('temperature',0,2),('timeout',1,600)):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not lower <= value <= upper:
-                raise ValueError(f'{name} 超出允许范围')
+                raise PreferenceError(name, f'{FIELD_LABELS[name]}（{name}）必须是 {lower}–{upper} 之间的数字')
         if not isinstance(self.cache_enabled, bool):
-            raise ValueError('缓存开关必须为布尔值')
+            raise PreferenceError('cache_enabled', '缓存开关必须为布尔值')
         if self.reasoning_effort not in ('auto','low','medium','high','xhigh','max'):
-            raise ValueError('推理档位无效')
+            raise PreferenceError('reasoning_effort', '推理档位无效')
 
 
 def write_json_atomic(path, payload):
