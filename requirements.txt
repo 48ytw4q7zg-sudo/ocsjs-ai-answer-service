@@ -7,4 +7,4 @@ markdown>=3.3.0
 httpx>=0.28.1,<1
 certifi>=2025.1.31
 waitress>=3.0.2,<4
-cryptography>=46,<50
+cryptography>=46,<51

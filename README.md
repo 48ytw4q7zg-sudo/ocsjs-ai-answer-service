@@ -85,7 +85,8 @@ EduBrain 提供两类运行形态：
 **发布前检查清单**：① 全部测试通过（见 AGENTS.md 与 `tests/test_hardening.py`）；② `portable_entry.py --self-test` 的 `passed=true`，并包含 4 项 `fault_*` 故障注入检查；
 ③ `packaging/verify_portable.py` 快照完整性通过；④ 便携版帮助文字“不读取本机 .env、cc-switch”与 `config.py` 中 `PORTABLE_MODE` 分支一致（`tests/test_hardening.py` 与自检 `host_environment_isolation` 覆盖）；
 ⑤ 依赖安全：`requirements-lock.txt` 记录已测试的具体版本；在打包环境执行 `.build\venv\Scripts\python.exe packaging\export_runtime_lock.py --check-osv` 查询 OSV 公开漏洞库。
-2026-09-26 的结果：32 个运行依赖中只有 cryptography 49.0.0 命中 CVE-2026-69247（PKCS#7 EnvelopedData 解密），本项目只用 AES-GCM 与 scrypt，不调用受影响的函数；修复版 50.0.0 超出当前 `<50` 的版本范围，升级需放宽范围后复测并重新打包。
+2026-09-27 的结果：cryptography 49.0.0 曾命中 CVE-2026-69247（PKCS#7 EnvelopedData 解密，本项目只用 AES-GCM 与 scrypt，不调用受影响的函数）；版本范围已放宽到 `<51`，并在独立的验证环境里用 cryptography 50.0.1 跑完全部测试和便携自检，锁定文件随之更新，OSV 复查 0 条命中。
+便携版打包环境（`.build\venv`）仍是 49.0.0，下次重新打包时再升级。
 
 ---
 

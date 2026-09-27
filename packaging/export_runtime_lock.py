@@ -15,8 +15,12 @@ from importlib import metadata
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from packaging.markers import default_environment
-from packaging.requirements import Requirement
+try:
+    from packaging.markers import default_environment
+    from packaging.requirements import Requirement
+except ImportError:  # any environment with pip can run this: fall back to pip's vendored copy
+    from pip._vendor.packaging.markers import default_environment
+    from pip._vendor.packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[1]
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
