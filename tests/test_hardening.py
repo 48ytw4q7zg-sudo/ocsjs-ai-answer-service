@@ -372,6 +372,19 @@ class ServiceHardeningTests(unittest.TestCase):
                     store.close()
                 service._answer_stores.clear()
 
+    def test_invalid_disk_cache_path_falls_back_to_memory(self):
+        # 含空字符的路径在 sqlite 打开时才失败：只告警并退回内存缓存，运行时照常可用。
+        service.Config.CACHE_PERSIST_FILE = 'bad\x00path.sqlite3'
+        try:
+            with self.assertLogs('utils', 'WARNING'):
+                self.assertIsNone(service._answer_store())
+            with patch.object(service, 'build_ai_client', return_value=RecordingClient()):
+                service._runtime_initialize()
+            self.assertIsNotNone(service.cache)
+            self.assertIsNone(service.cache.store)
+        finally:
+            service._answer_stores.clear()
+
     def test_dependency_version_warnings(self):
         self.assertEqual(service.dependency_version_warnings(), [])
         with patch.object(anthropic, '__version__', '2.0.0'):
@@ -525,6 +538,13 @@ class ConfigurationHelpersTests(unittest.TestCase):
                 with self.assertRaises(PreferenceError):
                     Preferences(base_url=url).validate()
         self.assertIsNone(provider_clients.base_url_problem('https://api.example.com/v1'))
+        with patch.dict(os.environ, {'AI_API_PROTOCOL': 'bogus-protocol'}), self.assertLogs('config', 'WARNING'):
+            self.assertEqual(config._env_choice('AI_API_PROTOCOL', 'anthropic', provider_clients.SUPPORTED_PROTOCOLS),
+                             'anthropic')
+        with patch.dict(os.environ, {'AI_REASONING_EFFORT': 'HIGH'}):
+            self.assertEqual(config._env_choice('AI_REASONING_EFFORT', 'auto', provider_clients.REASONING_EFFORTS), 'high')
+        with self.assertRaises(PreferenceError):
+            Preferences(reasoning_effort='extreme').validate()
 
     def test_portable_cache_persist_preference_maps_to_data_folder(self):
         self.assertTrue(Preferences.from_mapping({'cache_persist': True}).cache_persist)

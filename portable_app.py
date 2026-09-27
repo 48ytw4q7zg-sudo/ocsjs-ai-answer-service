@@ -9,6 +9,7 @@ from tkinter import messagebox, simpledialog, ttk
 import webbrowser
 
 from portable_settings import FIELD_LABELS, PreferenceError, Preferences, ProfileStore
+from provider_clients import REASONING_EFFORTS, SUPPORTED_PROTOCOLS
 
 CLIPBOARD_CLEAR_MS = 60000
 
@@ -69,15 +70,14 @@ class PortableWindow:
     def _configuration(self, page):
         page.columnconfigure(1, weight=1)
         prefs = self.controller.preferences
-        self._entry(page, 0, "protocol", "接口协议", prefs.protocol,
-                    values=("anthropic", "openai_responses", "openai_chat"))
+        self._entry(page, 0, "protocol", "接口协议", prefs.protocol, values=SUPPORTED_PROTOCOLS)
         self._entry(page, 1, "base_url", "接口基础地址", prefs.base_url)
         self._entry(page, 2, "model", "模型标识", prefs.model)
         self._entry(page, 3, "api_key", "API Key", "", secret=True)
         self._entry(page, 4, "access_token", "本地访问口令", self.controller.access_token, secret=True)
         self._entry(page, 5, "port", "本地端口（0 表示自动）", prefs.port)
         self._entry(page, 6, "reasoning_effort", "推理强度（由服务商支持）", prefs.reasoning_effort,
-                    values=("auto", "low", "medium", "high", "xhigh", "max"))
+                    values=REASONING_EFFORTS)
         advanced = ttk.Frame(page)
         advanced.grid(row=7, column=0, columnspan=2, sticky="ew", pady=6)
         for i, (name, label, value) in enumerate((

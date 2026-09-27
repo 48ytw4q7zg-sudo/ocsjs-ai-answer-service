@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 from ccswitch import CcswitchUnreadableError, get_ccswitch_config, reload_ccswitch_config
 from portable_paths import is_portable, data_root
-from provider_clients import SETTING_LIMITS, base_url_problem
+from provider_clients import REASONING_EFFORTS, SETTING_LIMITS, SUPPORTED_PROTOCOLS, base_url_problem
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +139,16 @@ def _env_float(
     return parsed
 
 
+def _env_choice(name: str, default: str, choices) -> str:
+    """只接受列出的值；填错时告警并说明回退到默认值，避免运行时起不来或把非法值发给上游。"""
+    value = _env_str(name, default).lower()
+    if value in choices:
+        return value
+    logger.warning("配置项 %s 的值 %r 不在可选范围（%s）内，已使用默认值 %s",
+                   name, _environment_value(name), "/".join(choices), default)
+    return default
+
+
 def _env_log_level(name: str, default: str = "INFO") -> str:
     value = _env_str(name, default).upper()
     level = getattr(logging, value, None)
@@ -216,7 +226,8 @@ def reload_config() -> bool:
     Config.CCSWITCH_RAW_MODEL = resolved["raw_model"]
     Config.CCSWITCH_IS_PROXY = resolved["is_proxy"]
     Config.EXTRA_ENV = resolved["extra_env"]
-    Config.API_PROTOCOL = 'anthropic' if resolved['source'] == 'ccswitch' else _env_str('AI_API_PROTOCOL', 'anthropic')
+    Config.API_PROTOCOL = ('anthropic' if resolved['source'] == 'ccswitch'
+                           else _env_choice('AI_API_PROTOCOL', 'anthropic', SUPPORTED_PROTOCOLS))
     _warn_invalid_base_url(Config.ANTHROPIC_BASE_URL)
     _config_loaded_at = time.time()
     Config.CONFIG_LOADED_AT = _config_loaded_at
@@ -265,8 +276,8 @@ class Config:
     # ---- AI 客户端配置 ----
     API_TIMEOUT = _env_float("API_TIMEOUT", 30.0, *SETTING_LIMITS["timeout"])
     API_MAX_RETRIES = _env_int("API_MAX_RETRIES", 2, *SETTING_LIMITS["max_retries"])
-    API_PROTOCOL = 'anthropic' if _ccswitch else _env_str('AI_API_PROTOCOL', 'anthropic')
-    REASONING_EFFORT = _env_str('AI_REASONING_EFFORT', 'auto')
+    API_PROTOCOL = 'anthropic' if _ccswitch else _env_choice('AI_API_PROTOCOL', 'anthropic', SUPPORTED_PROTOCOLS)
+    REASONING_EFFORT = _env_choice('AI_REASONING_EFFORT', 'auto', REASONING_EFFORTS)
 
     # ---- 日志配置 ----
     LOG_LEVEL = _env_log_level("LOG_LEVEL", "INFO")

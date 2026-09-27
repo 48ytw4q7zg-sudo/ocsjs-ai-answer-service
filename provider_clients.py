@@ -16,7 +16,9 @@ MODEL_SUFFIX_PATTERNS = (
 )
 
 
-# 服务端 .env 与便携版设置共用的取值范围（字段: (最小, 最大)），两边不再各写一份校验规则。
+# 服务端 .env 与便携版设置共用的可选值与取值范围，两边不再各写一份校验规则。
+SUPPORTED_PROTOCOLS = ('anthropic', 'openai_chat', 'openai_responses')
+REASONING_EFFORTS = ('auto', 'low', 'medium', 'high', 'xhigh', 'max')
 SETTING_LIMITS = {
     'max_tokens': (1, 131072),
     'temperature': (0, 2),

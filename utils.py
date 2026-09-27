@@ -156,7 +156,7 @@ class PersistentAnswerStore:
             self._connection.execute(
                 "CREATE TABLE IF NOT EXISTS answers (key TEXT PRIMARY KEY, answer TEXT NOT NULL, "
                 "created REAL NOT NULL, accessed REAL NOT NULL)")
-        except (sqlite3.Error, OSError) as exc:
+        except (sqlite3.Error, OSError, ValueError) as exc:
             self._disable(exc)
 
     def _disable(self, exc) -> None:

@@ -282,7 +282,12 @@ def _answer_store():
     path = Config.CACHE_PERSIST_FILE
     if not path:
         return None
-    key = str(Path(path).resolve())
+    try:
+        key = str(Path(path).resolve())
+    except (OSError, ValueError, RuntimeError) as exc:
+        # 缓存只是加速手段：路径写错时退回内存缓存，不能让整个答题运行时起不来。
+        logger.warning("CACHE_PERSIST_FILE 路径无效，已改为仅内存缓存: %s", type(exc).__name__)
+        return None
     store = _answer_stores.get(key)
     if store is None:
         store = _answer_stores[key] = PersistentAnswerStore(key)

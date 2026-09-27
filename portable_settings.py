@@ -11,7 +11,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-from provider_clients import SETTING_LIMITS, base_url_problem
+from provider_clients import REASONING_EFFORTS, SETTING_LIMITS, SUPPORTED_PROTOCOLS, base_url_problem
 
 _ASSOCIATED_DATA = b'EduBrain portable profile v1'
 _MAX_PROFILE_BYTES = 65536
@@ -57,7 +57,7 @@ class Preferences:
         return result
 
     def validate(self):
-        if self.protocol not in ('anthropic', 'openai_chat', 'openai_responses'):
+        if self.protocol not in SUPPORTED_PROTOCOLS:
             raise PreferenceError('protocol', '请选择受支持的接口格式')
         problem = base_url_problem(self.base_url)
         if problem:
@@ -81,7 +81,7 @@ class Preferences:
             raise PreferenceError('cache_enabled', '缓存开关必须为布尔值')
         if not isinstance(self.cache_persist, bool):
             raise PreferenceError('cache_persist', '缓存保存开关必须为布尔值')
-        if self.reasoning_effort not in ('auto','low','medium','high','xhigh','max'):
+        if self.reasoning_effort not in REASONING_EFFORTS:
             raise PreferenceError('reasoning_effort', '推理档位无效')
 
 
