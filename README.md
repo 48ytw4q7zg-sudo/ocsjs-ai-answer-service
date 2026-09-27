@@ -675,6 +675,8 @@ def reload_config() -> bool:
 | `EXTRA_ENV` | — | dict | `{}` | **v2.1.0**: settings.json env 中所有 14 项变量 |
 | `API_TIMEOUT` | `API_TIMEOUT` | float | `30.0` | API 请求超时秒数 |
 | `API_MAX_RETRIES` | `API_MAX_RETRIES` | int | `2` | API 自动重试次数 |
+| `API_PROTOCOL` | `AI_API_PROTOCOL` | str | `anthropic` | 接口协议：anthropic / openai_chat / openai_responses；填错时告警并回退默认值 |
+| `REASONING_EFFORT` | `AI_REASONING_EFFORT` | str | `auto` | 推理强度 auto/low/medium/high/xhigh/max（服务商支持时生效）；填错时告警并回退默认值 |
 | `LOG_LEVEL` | `LOG_LEVEL` | str | `"INFO"` | 日志级别 |
 | `ACCESS_TOKEN` | `ACCESS_TOKEN` | str\|None | `None` | 访问令牌（None=只允许本机回环地址调用） |
 | `ALLOW_REMOTE_WITHOUT_TOKEN` | `ALLOW_REMOTE_WITHOUT_TOKEN` | bool | `False` | 无令牌时是否允许非本机调用（高风险） |
