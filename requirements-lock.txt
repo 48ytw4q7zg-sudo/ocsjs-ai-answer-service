@@ -3,7 +3,8 @@
 # Ranges live in requirements.txt; build tools in packaging/build-requirements.txt.
 # Reproducible install: pip install -r requirements-lock.txt
 # OSV check 2026-09-27: 0 advisories. cryptography 50.0.1 fixes CVE-2026-69247 (PKCS#7 decryption,
-# never called here); the portable build venv (.build/venv) still bundles 49.0.0 until the next rebuild.
+# never called here); the portable build venv (.build/venv) was upgraded to 50.0.1 as well, and the
+# 2026-09-27 portable package bundles it.
 annotated-types==0.8.0
 anthropic==1.4.0
 anyio==4.15.1
