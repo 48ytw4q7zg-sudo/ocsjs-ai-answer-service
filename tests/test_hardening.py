@@ -608,6 +608,23 @@ class ConfigurationHelpersTests(unittest.TestCase):
                        password='synthetic-new-password')
             self.assertIn('encrypted_credentials', json.loads(store.backup_path.read_text(encoding='utf-8')))
 
+    def test_healthcheck_import_does_not_load_the_provider_sdk(self):
+        # Docker 每 30 秒跑一次健康检查：导入它不应把 anthropic/httpx/pydantic 整套加载进来
+        import subprocess
+        import sys
+        code = '\n'.join([
+            'import os, sys',
+            'from unittest.mock import patch',
+            "env = {'ANTHROPIC_API_KEY': 'unit-test-placeholder', 'ANTHROPIC_BASE_URL': 'http://127.0.0.1:1', 'ACCESS_TOKEN': ''}",
+            "with patch('dotenv.load_dotenv', return_value=False), patch('ccswitch.get_ccswitch_config', return_value=None), patch.dict(os.environ, env):",
+            '    import healthcheck',
+            "print(sorted(name for name in ('anthropic', 'httpx', 'pydantic') if name in sys.modules))",
+        ])
+        result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=120,
+                                cwd=str(Path(__file__).resolve().parents[1]))
+        self.assertEqual(result.returncode, 0, result.stderr[-800:])
+        self.assertEqual(result.stdout.strip().splitlines()[-1], '[]')
+
     def test_healthcheck_ready_mode(self):
         class Response:
             def __init__(self, body):

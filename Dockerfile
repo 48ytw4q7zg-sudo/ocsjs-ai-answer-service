@@ -8,12 +8,12 @@ ENV HOST=0.0.0.0 DEBUG=false
 WORKDIR /app
 
 # 复制依赖文件
-COPY requirements.txt .
+COPY requirements.txt requirements-lock.txt ./
 
-# 安装依赖
-RUN pip install --no-cache-dir -r requirements.txt
+# 按锁定文件安装测试过的那组版本（版本范围仍以 requirements.txt 为准）
+RUN pip install --no-cache-dir -r requirements-lock.txt
 
-COPY app.py config.py ccswitch.py utils.py logger.py portable_paths.py provider_clients.py api_docs.md LICENSE gunicorn.conf.py healthcheck.py ./
+COPY app.py config.py ccswitch.py utils.py logger.py portable_paths.py provider_clients.py provider_settings.py api_docs.md LICENSE gunicorn.conf.py healthcheck.py ./
 COPY templates ./templates
 COPY static ./static
 

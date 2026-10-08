@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP_FILES = [name + '.py' for name in (
     'portable_entry', 'portable_app', 'portable_controller', 'portable_selftest',
     'portable_paths', 'portable_settings', 'app', 'config', 'ccswitch', 'logger',
-    'utils', 'provider_clients')]
+    'utils', 'provider_clients', 'provider_settings')]
 PACKAGING_FILES = ['build_windows.ps1', 'packaging/windows.spec',
                    'packaging/verify_portable.py', 'packaging/build-requirements.txt',
                    'packaging/PORTABLE_README.txt', 'packaging/BUILD_WINDOWS.md',

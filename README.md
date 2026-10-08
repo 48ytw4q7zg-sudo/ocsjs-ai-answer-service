@@ -470,6 +470,7 @@ ocsjs-ai-answer-service/
 ├── utils.py                # 工具函数 (缓存 / 答案提取 / 题型归一)
 ├── logger.py               # 日志模块 (轮转 + Windows UTF-8)
 ├── provider_clients.py     # OpenAI chat/responses 协议适配器
+├── provider_settings.py    # 协议/推理强度/取值范围与地址校验（不依赖 SDK，健康检查导入很轻）
 ├── portable_entry.py       # Windows 便携入口
 ├── portable_app.py         # 原生 Tk 配置/问答界面
 ├── portable_controller.py  # 回环 Waitress 服务生命周期

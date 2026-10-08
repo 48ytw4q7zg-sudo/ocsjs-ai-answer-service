@@ -17,7 +17,7 @@ for path in (SOURCE, EVIDENCE, RUNTIME_HOOK):
         raise RuntimeError('Build inputs must be inside this project .build')
 
 APP_MODULES = [
-    'app', 'config', 'ccswitch', 'logger', 'utils', 'provider_clients',
+    'app', 'config', 'ccswitch', 'logger', 'utils', 'provider_clients', 'provider_settings',
     'portable_entry', 'portable_app', 'portable_controller', 'portable_selftest',
     'portable_paths', 'portable_settings',
 ]

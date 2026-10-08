@@ -12,7 +12,7 @@ from typing import Optional, Dict
 
 import logging
 
-from provider_clients import sanitize_model_name
+from provider_settings import sanitize_model_name
 
 logger = logging.getLogger(__name__)
 

@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 from ccswitch import CcswitchUnreadableError, get_ccswitch_config, reload_ccswitch_config
 from portable_paths import is_portable, data_root
-from provider_clients import REASONING_EFFORTS, SETTING_LIMITS, SUPPORTED_PROTOCOLS, base_url_problem
+from provider_settings import REASONING_EFFORTS, SETTING_LIMITS, SUPPORTED_PROTOCOLS, base_url_problem
 
 logger = logging.getLogger(__name__)
 
