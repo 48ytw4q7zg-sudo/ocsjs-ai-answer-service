@@ -132,7 +132,7 @@
                     (async () => {
                         // 令牌放在 X-Access-Token 请求头，关闭旧写法（ALLOW_LEGACY_TOKEN_LOCATIONS=false）后仍可用；
                         // 只有请求头装不下的非 ASCII 令牌才退回请求体
-                        const token = accessInput.value || '';
+                        const token = (accessInput.value || '').trim();  // 服务端也会去掉首尾空白；先去掉才能放进请求头
                         const headerSafe = /^[!-~](?:[ -~]*[!-~])?$/.test(token);
                         const headers = {'Content-Type': 'application/json'};
                         if (token && headerSafe) headers['X-Access-Token'] = token;
@@ -184,7 +184,7 @@
 
             try {
                 // 令牌走请求头，不与题目放在同一个 JSON 里；非 ASCII 令牌无法放进请求头时才回退到请求体。
-                const token = accessInput.value || '';
+                const token = (accessInput.value || '').trim();  // 服务端也会去掉首尾空白；先去掉才能放进请求头
                 const headers = {'Content-Type': 'application/json'};
                 const payload = {title: question, type: questionType || undefined, options: options || undefined};
                 if (token && /^[!-~](?:[ -~]*[!-~])?$/.test(token)) headers['X-Access-Token'] = token;

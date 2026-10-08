@@ -277,7 +277,7 @@ _answer_stores = {}
 
 
 def detach_unused_answer_stores(active=None):
-    """在 _runtime_lock 内从登记表摘下不再使用的磁盘缓存，交给 close_answer_stores 在锁外关闭。
+    """在 _runtime_lock 内从登记表摘下不再使用的磁盘缓存，交给 close_answer_stores 关闭（默认在后台线程里）。
 
     取消磁盘缓存或换了文件后要关闭旧连接，Windows 上旧文件才能删除；
     仍持有旧缓存的在途请求只会读到“不可用”，自动退回内存缓存。
@@ -294,14 +294,23 @@ def close_answer_stores(stores, wait=False):
     stores = list(stores or ())
     for store in stores:
         store.available = False  # 在途请求立即退回内存缓存
-    if not stores:
-        return
     if wait:
         for store in stores:
-            store.close()
+            _close_answer_store_quietly(store)
+        # 退出时也等之前重建留下的后台关闭线程结束，保证文件句柄都已释放
+        for worker in [t for t in threading.enumerate() if t.name == 'answer-store-close']:
+            worker.join(5)
         return
-    threading.Thread(target=lambda: [store.close() for store in stores],
-                     name='answer-store-close', daemon=True).start()
+    if stores:
+        threading.Thread(target=lambda: [_close_answer_store_quietly(store) for store in stores],
+                         name='answer-store-close', daemon=True).start()
+
+
+def _close_answer_store_quietly(store):
+    try:
+        store.close()
+    except Exception as exc:  # 一个连接关闭失败不影响其它连接
+        logger.warning("关闭答案磁盘缓存失败: %s", type(exc).__name__)
 
 
 def _cache_namespace():
@@ -1135,8 +1144,16 @@ def clear_cache():
         if active_cache is None:
             return jsonify({'success': False, 'message': '缓存未启用', 'error_code': 'cache_disabled'}), 409
         _cache_epoch += 1
-    # 删库可能要等磁盘锁：放在全局锁外。epoch 已先递增，清空前已在计算的答案不会再写回缓存。
-    count = active_cache.clear()
+    count = 0
+    while True:
+        # 删库可能要等磁盘锁：放在全局锁外。epoch 已先递增，清空前已在计算的答案不会再写回缓存。
+        count = max(count, active_cache.clear())
+        with _runtime_lock:
+            if cache is None or cache is active_cache:
+                break
+            # 清空期间运行时重建并发布了新的缓存实例，它可能已从共用的磁盘库读回旧答案：对它再清一次
+            active_cache = cache
+            _cache_epoch += 1
     _audit('清空缓存', True, count=count)
     return jsonify({'success': True, 'message': f'缓存已清除 ({count}条)', 'count': count})
 

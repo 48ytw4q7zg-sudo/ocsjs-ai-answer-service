@@ -139,6 +139,27 @@ class ServiceHardeningTests(unittest.TestCase):
         proxied = {'Host': 'public.example', 'X-Forwarded-For': '203.0.113.9', 'X-Access-Token': 'synthetic-token'}
         self.assertEqual(self.http.get('/api/stats', headers=proxied).status_code, 200)
 
+    def test_cache_clear_also_clears_a_cache_published_during_the_clear(self):
+        # 清空在全局锁外执行：期间若运行时重建并发布了新的缓存实例，它也必须被清空
+        service.Config.ACCESS_TOKEN = 'synthetic-token'
+        headers = {'X-Access-Token': 'synthetic-token', 'Sec-Fetch-Site': 'same-origin'}
+        old, new = SimpleCache(600), SimpleCache(600)
+        old.set('q', 'old answer')
+        new.set('q', 'answer read back from the shared disk store')
+        real_clear = old.clear
+
+        def clear_while_rebuilding():
+            service.cache = new
+            return real_clear()
+
+        service.cache = old
+        with patch.object(old, 'clear', clear_while_rebuilding):
+            response = self.http.post('/api/cache/clear', headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(service.cache, new)
+        self.assertIsNone(new.get('q'))
+        self.assertIsNone(old.get('q'))
+
     def test_token_writes_behind_host_rewriting_proxy_are_not_cross_site(self):
         service.Config.ACCESS_TOKEN = 'synthetic-token'
         headers = {'X-Access-Token': 'synthetic-token', 'Origin': 'https://public.example',
