@@ -3,7 +3,7 @@
 Agent instructions for `ocsjs-ai-answer-service` (EduBrain portable answer service).
 
 ## Project map
-- Flask app: `app.py` + `config.py` + `utils.py` + `provider_clients.py` + `logger.py`
+- Flask app: `app.py` + `config.py` + `utils.py` + `provider_clients.py` + `provider_settings.py` (SDK-free settings) + `logger.py`
 - Portable Windows GUI: `portable_entry.py` → `portable_app.py` / `portable_controller.py` / `portable_selftest.py` / `portable_paths.py` / `portable_settings.py`
 - Packaging: `packaging/verify_portable.py`, `packaging/windows.spec`, `build_windows.ps1`
 - Tests: root `test_*.py`, `tests/test_security_and_config.py`, `packaging/test_snapshot_integrity.py`

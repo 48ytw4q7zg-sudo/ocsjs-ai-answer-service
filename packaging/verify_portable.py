@@ -77,7 +77,7 @@ if '--self-test' in sys.argv and '--self-test-output' in sys.argv:
             _report['stdout_is_none_at_exit'] = sys.stdout is None
             _report['modules'] = {}
             for name in ('app', 'config', 'portable_app', 'portable_paths', 'portable_settings',
-                         'portable_controller', 'provider_clients', 'waitress', 'anthropic',
+                         'portable_controller', 'provider_clients', 'provider_settings', 'waitress', 'anthropic',
                          'httpx', 'certifi', 'cryptography.hazmat.bindings._rust', '_tkinter', '_ssl'):
                 module = sys.modules.get(name)
                 _report['modules'][name] = str(getattr(module, '__file__', ''))

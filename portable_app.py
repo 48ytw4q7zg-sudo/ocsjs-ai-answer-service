@@ -370,7 +370,11 @@ class PortableWindow:
             return
         self.variables["access_token"].set(self.controller.generate_access_token())
         note = "已生成新口令：点击“应用到本次运行”后生效，旧口令和已登录的网页会话随即失效。"
-        if self.store.has_credentials():
+        try:
+            saved = self.store.has_credentials()
+        except (ValueError, OSError):
+            saved = True  # 配置文件读不出来时保守地提醒重新保存
+        if saved:
             # 应用只影响本次运行；不重新保存的话，下次启动解锁会恢复磁盘上那份可能已泄露的旧口令
             note += "你加密保存过口令，还需再点“保存便携配置”，否则下次启动解锁后会恢复旧口令。"
         self.status.set(note)

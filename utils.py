@@ -37,6 +37,8 @@ class SimpleCache:
         self.namespace = str(namespace or "")
         self.store = store
         self._lock = threading.RLock()
+        # 每次 clear() 加一：磁盘读写在锁外进行，回填内存或写盘前比对代数，清空之后的旧结果一律丢弃。
+        self._generation = 0
         self.hits = 0
         self.misses = 0
         self.evictions = 0
@@ -81,13 +83,15 @@ class SimpleCache:
             elif self.store is None or self.expiration <= 0:
                 self.misses += 1
                 return None
+            generation = self._generation
         if entry is not None:
             if touch is not None:
                 self.store.touch(key, touch)
             return value, max(0.0, now - created)
         stored = self.store.get(key, now, self.expiration)
         with self._lock:
-            if stored is None:
+            if stored is None or generation != self._generation:
+                # 读盘期间缓存被清空：不把清空前的答案回填进内存
                 self.misses += 1
                 return None
             if key not in self.cache:
@@ -123,7 +127,7 @@ class SimpleCache:
                     self._evict_one()
                 created = now
             self.cache[key] = (now, answer, created, now)
-        record = (key, answer, created, now) if self.store is not None else None
+            record = (key, answer, created, now, self._generation) if self.store is not None else None
         if defer_store:
             return record
         self.persist(record)
@@ -131,16 +135,19 @@ class SimpleCache:
 
     def persist(self, record) -> None:
         if record is not None and self.store is not None:
-            key, answer, created, now = record
-            self.store.put(key, answer, created, now, self.expiration, self.max_size)
+            key, answer, created, now, generation = record
+            # 代数在 SQLite 锁内比对：写入与 clear() 的删库串行，清空之后才到的写入直接丢弃
+            self.store.put(key, answer, created, now, self.expiration, self.max_size,
+                           guard=lambda: generation == self._generation)
 
     def clear(self) -> int:
         with self._lock:
+            self._generation += 1
             count = len(self.cache)
             self.cache.clear()
-            if self.store is not None:
-                count = max(count, self.store.clear())
-            return count
+        if self.store is not None:
+            count = max(count, self.store.clear())
+        return count
 
     def remove_expired(self) -> int:
         now = time.time()
@@ -161,12 +168,14 @@ class SimpleCache:
     def stats(self) -> Dict[str, Any]:
         with self._lock:
             lookups = self.hits + self.misses
-            return {
+            snapshot = {
                 'size': len(self.cache), 'max_size': self.max_size,
                 'hits': self.hits, 'misses': self.misses, 'evictions': self.evictions,
                 'hit_rate': round(self.hits / lookups, 4) if lookups else None,
-                'persisted': self.store.count() if self.store is not None else None,
             }
+        # 磁盘计数在缓存锁外查询：库被占用时不会拖住其它缓存读写
+        snapshot['persisted'] = self.store.count() if self.store is not None else None
+        return snapshot
 
 
 class PersistentAnswerStore:
@@ -224,8 +233,11 @@ class PersistentAnswerStore:
             return row[0], row[1]
         return self._run(operation)
 
-    def put(self, key: str, answer: str, created: float, now: float, expiration: float, max_rows: int) -> None:
+    def put(self, key: str, answer: str, created: float, now: float, expiration: float, max_rows: int,
+            guard=None) -> None:
         def operation(db):
+            if guard is not None and not guard():
+                return
             db.execute("INSERT OR REPLACE INTO answers (key, answer, created, accessed) VALUES (?, ?, ?, ?)",
                        (key, answer, created, now))
             self._writes += 1

@@ -341,11 +341,17 @@ class ServiceHardeningTests(unittest.TestCase):
                 self.calls.append(kwargs)
                 return '<html>synthetic gateway page</html>'
 
-        for client in (TextClient(), RecordingClient(error=anthropic.APIResponseValidationError(
+        clients = (
+            TextClient(),
+            RecordingClient(error=anthropic.APIResponseValidationError(
                 response=httpx.Response(200, request=httpx.Request('POST', 'http://provider.invalid/v1/messages')),
-                body=None))):
+                body=None)),
+            # anthropic SDK 对空的、被截断的 JSON 正文直接抛出解码错误
+            RecordingClient(error=json.JSONDecodeError('Expecting value', '', 0)),
+        )
+        for index, client in enumerate(clients):
             service.client = client
-            response = self.http.post('/api/search', json={'title': f'unparseable {type(client).__name__}'})
+            response = self.http.post('/api/search', json={'title': f'unparseable upstream body {index}'})
             self.assertEqual(len(client.calls), 1)
             self.assertEqual(response.status_code, 502)
             self.assertEqual(response.get_json()['error_code'], 'upstream_invalid_response')
@@ -386,6 +392,26 @@ class ServiceHardeningTests(unittest.TestCase):
                 for store in service._answer_stores.values():
                     store.close()
                 service._answer_stores.clear()
+
+    def test_unused_disk_cache_connections_are_closed(self):
+        original = service.Config.CACHE_PERSIST_FILE
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'cache.sqlite3'
+            service.Config.CACHE_PERSIST_FILE = str(path)
+            try:
+                with patch.object(service, 'build_ai_client', return_value=RecordingClient()):
+                    service._runtime_initialize()
+                first = service.cache.store
+                self.assertTrue(first.available)
+                service.Config.CACHE_PERSIST_FILE = ''
+                with patch.object(service, 'build_ai_client', return_value=RecordingClient()):
+                    service._runtime_initialize()
+                self.assertIsNone(service.cache.store)
+                self.assertFalse(first.available, 'turning the disk cache off must release the SQLite file')
+                path.unlink()  # Windows 上句柄释放后才能删除
+            finally:
+                service.Config.CACHE_PERSIST_FILE = original
+                service.close_answer_stores(service.detach_unused_answer_stores(None))
 
     def test_invalid_disk_cache_path_falls_back_to_memory(self):
         # 含空字符的路径在 sqlite 打开时才失败：只告警并退回内存缓存，运行时照常可用。
@@ -754,6 +780,94 @@ class UtilityTests(unittest.TestCase):
             degraded = SimpleCache(60, store=broken)
             degraded.set('q', 'A')
             self.assertEqual(degraded.get('q'), 'A')
+
+    def test_disk_cache_io_runs_outside_the_cache_lock_and_clear_wins_races(self):
+        def lock_is_free(lock):
+            # 另一个线程拿得到缓存锁，说明这次磁盘读写没有占着它
+            result = []
+
+            def attempt():
+                acquired = lock.acquire(timeout=1)
+                if acquired:
+                    lock.release()
+                result.append(acquired)
+
+            worker = threading.Thread(target=attempt)
+            worker.start()
+            worker.join()
+            return result == [True]
+
+        with tempfile.TemporaryDirectory() as folder:
+            store = PersistentAnswerStore(Path(folder) / 'answers.sqlite3')
+            try:
+                cache = SimpleCache(600, store=store)
+                reader = SimpleCache(600, store=store)
+                real_put, real_get = store.put, store.get
+                observed = []
+
+                def put(*args, **kwargs):
+                    observed.append(('put', lock_is_free(cache._lock)))
+                    return real_put(*args, **kwargs)
+
+                def get(*args, **kwargs):
+                    observed.append(('get', lock_is_free(reader._lock)))
+                    return real_get(*args, **kwargs)
+
+                with patch.object(store, 'put', put), patch.object(store, 'get', get):
+                    cache.set('q1', 'A')
+                    self.assertEqual(reader.get('q1'), 'A')
+                self.assertEqual(observed, [('put', True), ('get', True)])
+                # 写盘前被清空：延后写入的旧答案不能落盘
+                record = cache.set('q2', 'B', defer_store=True)
+                self.assertEqual(store.count(), 1)
+                cache.clear()
+                cache.persist(record)
+                self.assertEqual(store.count(), 0)
+                # 读盘期间被清空：读到的旧答案不回填内存
+                cache.set('q3', 'C')
+
+                def get_then_clear(*args, **kwargs):
+                    value = real_get(*args, **kwargs)
+                    reader.clear()
+                    return value
+
+                with patch.object(store, 'get', get_then_clear):
+                    self.assertIsNone(reader.get('q3'))
+                self.assertEqual(len(reader.cache), 0)
+            finally:
+                store.close()
+
+    def test_disk_cache_refreshes_access_time_and_indexes_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'answers.sqlite3'
+            store = PersistentAnswerStore(path)
+            try:
+                start = 1_000_000.0
+                cache = SimpleCache(600, store=store)  # 同步间隔 min(3600, 600/10) = 60 秒
+
+                def accessed():
+                    raw = sqlite3.connect(path)
+                    try:
+                        return raw.execute('SELECT accessed FROM answers').fetchone()[0]
+                    finally:
+                        raw.close()
+
+                with patch('utils.time.time', return_value=start):
+                    cache.set('q', 'A')
+                with patch('utils.time.time', return_value=start + 30):
+                    self.assertEqual(cache.get('q'), 'A')
+                self.assertEqual(accessed(), start, 'memory hits must not write the disk on every lookup')
+                with patch('utils.time.time', return_value=start + 61):
+                    self.assertEqual(cache.get('q'), 'A')
+                self.assertEqual(accessed(), start + 61, 'a hot answer must not look idle on disk')
+                raw = sqlite3.connect(path)
+                try:
+                    indexes = [row[1] for row in raw.execute('PRAGMA index_list(answers)')]
+                finally:
+                    raw.close()
+                self.assertIn('answers_accessed', indexes)
+            finally:
+                store.close()
 
     def test_cache_is_consistent_under_concurrent_access(self):
         cache = SimpleCache(60, max_size=50)

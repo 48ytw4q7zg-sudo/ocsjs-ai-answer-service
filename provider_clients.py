@@ -1,9 +1,7 @@
 """Text-only OpenAI protocol adapters with the service's Anthropic-shaped interface."""
-import re
 import os
 import time
 from types import SimpleNamespace
-from urllib.parse import urlsplit
 
 import anthropic
 import certifi

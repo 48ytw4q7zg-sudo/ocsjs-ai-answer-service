@@ -8,6 +8,7 @@ EduBrain AI - 智能题库系统 v2026.6.10.1739
 """
 from flask import Flask, g, has_request_context, redirect, request, jsonify, render_template
 import time
+import json
 import logging
 import secrets
 import hashlib
@@ -265,23 +266,28 @@ def _runtime_initialize():
         client, cache = candidate_client, candidate_cache
         _cache_epoch += 1
         _runtime_init_error = None
-        close_unused_answer_stores(cache.store if cache is not None else None)
+        stale_stores = detach_unused_answer_stores(cache.store if cache is not None else None)
         if previous_client is not None and previous_client is not client:
             _retire_client(previous_client)
+    # 关闭连接要等进行中的磁盘操作结束：放在全局锁外，慢速 U 盘不会拖住其它请求。
+    close_answer_stores(stale_stores)
 
 
 _answer_stores = {}
 
 
-def close_unused_answer_stores(active=None):
-    """关闭不再使用的磁盘缓存连接：取消磁盘缓存或换了文件后，Windows 上旧文件才能删除。
+def detach_unused_answer_stores(active=None):
+    """在 _runtime_lock 内从登记表摘下不再使用的磁盘缓存，交给 close_answer_stores 在锁外关闭。
 
+    取消磁盘缓存或换了文件后要关闭旧连接，Windows 上旧文件才能删除；
     仍持有旧缓存的在途请求只会读到“不可用”，自动退回内存缓存。
     """
-    for key, store in list(_answer_stores.items()):
-        if store is not active:
-            store.close()
-            del _answer_stores[key]
+    return [_answer_stores.pop(key) for key, store in list(_answer_stores.items()) if store is not active]
+
+
+def close_answer_stores(stores):
+    for store in stores:
+        store.close()
 
 
 def _cache_namespace():
@@ -751,7 +757,11 @@ def _call_ai(prompt: str, max_tokens=None):
                 # SDKs that removed temperature must not receive it.
                 if 'temperature' in parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
                     message_arguments['temperature'] = current_temperature
-                response = create_message(**message_arguments)
+                try:
+                    response = create_message(**message_arguments)
+                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    # anthropic SDK 对 200 但正文为空、被截断或不是 JSON 的响应直接抛解码错误：按“无法解析”报 502，不重试
+                    raise ProviderResponseError(message='Provider returned an invalid response', request=None) from exc
                 text = _extract_text_from_response(response)
                 if text:
                     return text

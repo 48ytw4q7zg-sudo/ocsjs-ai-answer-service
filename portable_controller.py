@@ -232,8 +232,9 @@ class PortableController:
         with self.module._runtime_lock:
             client = self.module.client
             self.module.client = None
-            # 退出时释放磁盘缓存文件句柄，用户随后可以直接删除 answer-cache.sqlite3。
-            self.module.close_unused_answer_stores(None)
+            stale_stores = self.module.detach_unused_answer_stores(None)
+        # 退出时释放磁盘缓存文件句柄（在全局锁外关闭），用户随后可以直接删除 answer-cache.sqlite3。
+        self.module.close_answer_stores(stale_stores)
         if client is not None and hasattr(client, "close"):
             try:
                 client.close()
