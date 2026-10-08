@@ -4,16 +4,16 @@
 
 **运行时版本**：`2026.6.10.1739`（常量 `_SERVER_VERSION`）
 **作者**：QXW
-**当前交付状态**：源码 `main` + Windows x64 便携发行 `portable-20260913`（`release-verified`）
+**当前交付状态**：源码 `main` + Windows x64 便携发行 `portable-20261009`（`release-verified`）
 
 | 项目 | 地址 |
 |------|------|
 | GitHub 源码仓库 | [48ytw4q7zg-sudo/ocsjs-ai-answer-service](https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service) |
 | Gitee 源码仓库 | [qinxinwei123/ocsjs-ai-answer-service](https://gitee.com/qinxinwei123/ocsjs-ai-answer-service) |
-| 最新 Windows x64 便携包 | [Release portable-20260913](https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/tag/portable-20260913) |
-| 便携交付记录 | [docs/portable-delivery-20260912.md](docs/portable-delivery-20260912.md) |
+| 最新 Windows x64 便携包 | [Release portable-20261009](https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/tag/portable-20261009) |
+| 便携交付记录 | [docs/portable-delivery-20261009.md](docs/portable-delivery-20261009.md) |
 
-便携包构建源码提交 `228b38c`；ZIP SHA256 `04167abcebdbc34992bbaec0ee63f0a8ba0bb38afc58667dc420652cc76a1810`。
+便携包构建源码提交 `d3d3dd5`；ZIP SHA256 `c8810677af006d3e4af29aa3e68c9e218c9cca7e9a130206ddddb7ccb96b9a49`。
 
 > 文中 `v2.1.0` / `v2.2.0` 为历史功能标签；运行时版本常量以代码 `_SERVER_VERSION = "2026.6.10.1739"` 为准。
 
@@ -112,7 +112,7 @@ EduBrain 提供两类运行形态：
 - **全题型答案清洗** (v2.2.0): 自动去除"答案："等前缀、尾标点；单选/多选可按当前 options 把 A/B/C 字母答案映射为真实选项文本；单选可剥离模型附带的简短解释；判断题中英文标准化
 - **OCS 请求兼容**: `/api/search` 支持 GET、表单、标准 `application/json` 与 `application/*+json`；题干字段兼容 `title`/`question`/`q`/`content`/`text`，题型字段兼容 `type`/`questionType`/`question_type`，选项字段兼容 `options`/`choices`/`answers` 等常见别名；选项支持字符串、字符串数组、对象数组（如 `{label,text}`）或键值对象（如 `{A:"上海"}`），会统一换行、去除空行和首尾空格，减少重复缓存和选项解析误差
 - **Docker 部署**: 提供 Dockerfile + docker-compose.yml，支持容器化运行
-- **Windows 便携包** (portable-20260913): `EduBrain.exe` / `EduBrain-console.exe` 自带运行库与本地静态资源，可离线打开界面
+- **Windows 便携包** (portable-20261009): `EduBrain.exe` / `EduBrain-console.exe` 自带运行库与本地静态资源，可离线打开界面
 
 ---
 
@@ -161,9 +161,9 @@ EduBrain 提供两类运行形态：
 ```powershell
 (Get-CimInstance Win32_ComputerSystem).SystemType  # 需 x64-based
 
-# Release: portable-20260913
-# https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/tag/portable-20260913
-# ZIP SHA256: 04167abcebdbc34992bbaec0ee63f0a8ba0bb38afc58667dc420652cc76a1810
+# Release: portable-20261009
+# https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/tag/portable-20261009
+# ZIP SHA256: c8810677af006d3e4af29aa3e68c9e218c9cca7e9a130206ddddb7ccb96b9a49
 
 New-Item -ItemType Directory -Force D:\Tools | Out-Null
 Expand-Archive .\EduBrain-Windows-x64.zip -DestinationPath D:\Tools -Force
@@ -242,7 +242,7 @@ PowerShell 若禁脚本：`Set-ExecutionPolicy -Scope Process RemoteSigned`。
 
 1. 打开 Edge，进入：  
    `https://github.com/48ytw4q7zg-sudo/ocsjs-ai-answer-service/releases/latest`  
-2. 在 Assets 下载 **`EduBrain-Windows-x64.zip`**（当前发行 portable-20260913，约 38 MB）。  
+2. 在 Assets 下载 **`EduBrain-Windows-x64.zip`**（当前发行 portable-20261009，约 39 MB）。  
 3. `Ctrl+J` 打开下载列表，进入下载文件夹。
 
 > GitHub 失败：用 Gitee 或代下。不要下成 Source code 自动包去当安装包解压使用（那是源码，要装 Python）。
@@ -364,7 +364,7 @@ cd /d D:\Tools\ocsjs-ai-answer-service
 | 便携 GUI 开了但无答案 | 未填 Key 或网络失败 | 窗口里配置；查服务商控制台 |
 | Win10 异常 | **未实机验证边界** | 可尝试；不能算官方通过 |
 
-边界与记录：[docs/portable-delivery-20260912.md](docs/portable-delivery-20260912.md)、[docs/functional-completion.md](docs/functional-completion.md)、[packaging/PORTABLE_README.txt](packaging/PORTABLE_README.txt)。
+边界与记录：[docs/portable-delivery-20261009.md](docs/portable-delivery-20261009.md)、[docs/functional-completion.md](docs/functional-completion.md)、[packaging/PORTABLE_README.txt](packaging/PORTABLE_README.txt)。
 
 ---
 ## 1. 克隆代码库（兼容旧说明）
