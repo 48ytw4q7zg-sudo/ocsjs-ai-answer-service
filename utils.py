@@ -30,8 +30,8 @@ class SimpleCache:
 
     def __init__(self, expiration_seconds: int = 86400, max_size: int = 10000,
                  namespace: str = "", store: "Optional[PersistentAnswerStore]" = None):
-        # key -> (最近访问时间, 答案, 写入时间)；OrderedDict 顺序即 LRU 顺序。
-        self.cache: "OrderedDict[str, tuple[float, str, float]]" = OrderedDict()
+        # key -> (最近访问时间, 答案, 写入时间, 最近同步到磁盘的访问时间)；OrderedDict 顺序即 LRU 顺序。
+        self.cache: "OrderedDict[str, tuple[float, str, float, float]]" = OrderedDict()
         self.expiration = max(0.0, float(expiration_seconds))
         self.max_size = max(1, int(max_size))
         self.namespace = str(namespace or "")
@@ -53,30 +53,50 @@ class SimpleCache:
         content = json.dumps(parts, ensure_ascii=False, separators=(',', ':'))
         return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
+    def _sync_interval(self) -> float:
+        # 内存命中时最多每隔这么久把访问时间同步到磁盘：足够防止热门答案被当成闲置清掉，又不必每次写盘。
+        return min(3600.0, self.expiration / 10)
+
     def get_with_age(self, question: str, question_type: str = "",
                      options: str = "") -> Optional[tuple[str, float]]:
-        """返回 (答案, 距首次写入的秒数)；未命中返回 None。内存未命中时再查磁盘层。"""
+        """返回 (答案, 距首次写入的秒数)；未命中返回 None。内存未命中时再查磁盘层。
+
+        磁盘读写都在缓存锁之外进行，慢速 U 盘或被占用的数据库不会拖住其它查询。
+        """
         key = self._generate_key(question, question_type, options)
+        touch = None
         with self._lock:
-            entry = self.cache.get(key)
             now = time.time()
+            entry = self.cache.get(key)
             if entry is not None and (self.expiration <= 0 or now - entry[0] >= self.expiration):
                 del self.cache[key]
                 entry = None
-            if entry is None and self.store is not None and self.expiration > 0:
-                stored = self.store.get(key, now, self.expiration)
-                if stored is not None:
-                    while len(self.cache) >= self.max_size:
-                        self._evict_one()
-                    entry = (now, stored[0], stored[1])
-            if entry is None:
+            if entry is not None:
+                _, value, created, synced = entry
+                if self.store is not None and now - synced >= self._sync_interval():
+                    synced = touch = now
+                self.cache[key] = (now, value, created, synced)
+                self.cache.move_to_end(key)
+                self.hits += 1
+            elif self.store is None or self.expiration <= 0:
                 self.misses += 1
                 return None
-            _, value, created = entry
-            self.cache[key] = (now, value, created)
+        if entry is not None:
+            if touch is not None:
+                self.store.touch(key, touch)
+            return value, max(0.0, now - created)
+        stored = self.store.get(key, now, self.expiration)
+        with self._lock:
+            if stored is None:
+                self.misses += 1
+                return None
+            if key not in self.cache:
+                while len(self.cache) >= self.max_size:
+                    self._evict_one()
+            self.cache[key] = (now, stored[0], stored[1], now)
             self.cache.move_to_end(key)
             self.hits += 1
-            return value, max(0.0, now - created)
+            return stored[0], max(0.0, now - stored[1])
 
     def get(self, question: str, question_type: str = "",
             options: str = "") -> Optional[str]:
@@ -84,12 +104,16 @@ class SimpleCache:
         return result[0] if result is not None else None
 
     def set(self, question: str, answer: str, question_type: str = "",
-            options: str = "") -> None:
+            options: str = "", *, defer_store: bool = False):
+        """写入内存缓存，再在缓存锁外写磁盘层。
+
+        defer_store=True 时不写磁盘，而是返回待写记录，由调用方在自己的锁外交给 persist()。
+        """
         key = self._generate_key(question, question_type, options)
         with self._lock:
             self.remove_expired()
             if self.expiration <= 0:
-                return
+                return None
             now = time.time()
             if key in self.cache:
                 created = self.cache[key][2]
@@ -98,9 +122,17 @@ class SimpleCache:
                 while len(self.cache) >= self.max_size:
                     self._evict_one()
                 created = now
-            self.cache[key] = (now, answer, created)
-            if self.store is not None:
-                self.store.put(key, answer, created, now, self.expiration, self.max_size)
+            self.cache[key] = (now, answer, created, now)
+        record = (key, answer, created, now) if self.store is not None else None
+        if defer_store:
+            return record
+        self.persist(record)
+        return None
+
+    def persist(self, record) -> None:
+        if record is not None and self.store is not None:
+            key, answer, created, now = record
+            self.store.put(key, answer, created, now, self.expiration, self.max_size)
 
     def clear(self) -> int:
         with self._lock:
@@ -117,8 +149,7 @@ class SimpleCache:
                 count = len(self.cache)
                 self.cache.clear()
                 return count
-            expired = [k for k, (ts, _value, _created) in self.cache.items()
-                       if now - ts >= self.expiration]
+            expired = [k for k, entry in self.cache.items() if now - entry[0] >= self.expiration]
             for k in expired:
                 del self.cache[k]
             return len(expired)
@@ -156,6 +187,8 @@ class PersistentAnswerStore:
             self._connection.execute(
                 "CREATE TABLE IF NOT EXISTS answers (key TEXT PRIMARY KEY, answer TEXT NOT NULL, "
                 "created REAL NOT NULL, accessed REAL NOT NULL)")
+            # 过期清理与按访问时间截断都按 accessed 查询，没有索引时每次都要全表扫描。
+            self._connection.execute("CREATE INDEX IF NOT EXISTS answers_accessed ON answers (accessed)")
         except (sqlite3.Error, OSError, ValueError) as exc:
             self._disable(exc)
 
@@ -202,6 +235,9 @@ class PersistentAnswerStore:
                 db.execute("DELETE FROM answers WHERE key IN "
                            "(SELECT key FROM answers ORDER BY accessed DESC LIMIT -1 OFFSET ?)", (int(max_rows),))
         self._run(operation)
+
+    def touch(self, key: str, now: float) -> None:
+        self._run(lambda db: db.execute("UPDATE answers SET accessed = ? WHERE key = ?", (now, key)))
 
     def clear(self) -> int:
         return self._run(lambda db: db.execute("DELETE FROM answers").rowcount, 0)

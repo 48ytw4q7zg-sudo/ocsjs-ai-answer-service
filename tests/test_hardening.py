@@ -335,6 +335,21 @@ class ServiceHardeningTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.get_json()['error_code'], 'upstream_invalid_response')
 
+    def test_unparseable_anthropic_body_is_reported_as_invalid_response(self):
+        class TextClient(RecordingClient):
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                return '<html>synthetic gateway page</html>'
+
+        for client in (TextClient(), RecordingClient(error=anthropic.APIResponseValidationError(
+                response=httpx.Response(200, request=httpx.Request('POST', 'http://provider.invalid/v1/messages')),
+                body=None))):
+            service.client = client
+            response = self.http.post('/api/search', json={'title': f'unparseable {type(client).__name__}'})
+            self.assertEqual(len(client.calls), 1)
+            self.assertEqual(response.status_code, 502)
+            self.assertEqual(response.get_json()['error_code'], 'upstream_invalid_response')
+
     def test_legacy_token_locations_can_be_disabled(self):
         service.Config.ACCESS_TOKEN = 'synthetic-token'
         service._legacy_token_warned.clear()
@@ -578,6 +593,20 @@ class ConfigurationHelpersTests(unittest.TestCase):
             self.assertNotIn('encrypted_credentials', json.loads(store.backup_path.read_text(encoding='utf-8')))
             self.assertFalse(reopened.recovered_from_backup)
             self.assertEqual(ProfileStore(store.path).load_preferences().model, 'third-model')
+
+    def test_profile_backup_drops_credentials_encrypted_with_an_old_password(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = ProfileStore(Path(folder) / 'profile.json')
+            store.save(Preferences(model='first-model'), credentials={'api_key': 'SYNTHETIC-OLD'},
+                       password='synthetic-old-password')
+            store.save(Preferences(model='second-model'), credentials={'api_key': 'SYNTHETIC-NEW'},
+                       password='synthetic-new-password')
+            backup = json.loads(store.backup_path.read_text(encoding='utf-8'))
+            self.assertEqual(backup['preferences']['model'], 'first-model')
+            self.assertNotIn('encrypted_credentials', backup, 'a leaked old password must not unlock the backup')
+            store.save(Preferences(model='third-model'), credentials={'api_key': 'SYNTHETIC-NEW'},
+                       password='synthetic-new-password')
+            self.assertIn('encrypted_credentials', json.loads(store.backup_path.read_text(encoding='utf-8')))
 
     def test_healthcheck_ready_mode(self):
         class Response:

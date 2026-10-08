@@ -155,7 +155,8 @@ class PortableWindow:
             "接入脚本需要重新复制配置。复制的接入配置把口令放在 headers（请求头）里，不出现在网址中；"
             "它仍然是凭据，不要公开分享。复制到剪贴板的口令或配置会在 60 秒后或关闭窗口时自动清除；"
             "若开启了 Windows 剪贴板历史（Win+V），历史里的副本需要你手动删除。"
-            "怀疑泄露时点击“生成新口令”，再点“应用到本次运行”，旧口令立即失效。\n\n"
+            "怀疑泄露时点击“生成新口令”，再点“应用到本次运行”，旧口令立即失效；加密保存过口令的，"
+            "还要重新“保存便携配置”，否则下次启动会恢复旧口令。\n\n"
             "答案缓存默认只在内存中。勾选“缓存保存到 data 文件夹”后，答案（不含题目原文）写入 data\\answer-cache.sqlite3，"
             "下次启动仍可命中；“清空答案缓存”会一并清空，也可直接删除该文件。\n\n"
             "每次保存都会把上一份配置留作 data\\profile.json.bak；主文件损坏时自动改用备份并提示。\n\n"
@@ -318,7 +319,8 @@ class PortableWindow:
     def clear_cache(self):
         if self.busy or self.closing:
             return
-        if messagebox.askyesno("清空缓存", "仅清空当前运行的答案缓存，是否继续？", parent=self.root):
+        if messagebox.askyesno("清空缓存", "将清空答案缓存；已启用“缓存保存到 data 文件夹”时，"
+                               "历次运行保存在磁盘上的答案也会一并删除。是否继续？", parent=self.root):
             self._run("正在清空答案缓存", self.controller.clear_cache)
 
     def _copy_secret(self, value):
@@ -367,7 +369,11 @@ class PortableWindow:
         if self.closing:
             return
         self.variables["access_token"].set(self.controller.generate_access_token())
-        self.status.set("已生成新口令：点击“应用到本次运行”后生效，旧口令和已登录的网页会话随即失效。")
+        note = "已生成新口令：点击“应用到本次运行”后生效，旧口令和已登录的网页会话随即失效。"
+        if self.store.has_credentials():
+            # 应用只影响本次运行；不重新保存的话，下次启动解锁会恢复磁盘上那份可能已泄露的旧口令
+            note += "你加密保存过口令，还需再点“保存便携配置”，否则下次启动解锁后会恢复旧口令。"
+        self.status.set(note)
 
     @staticmethod
     def _replace_text(widget, value):

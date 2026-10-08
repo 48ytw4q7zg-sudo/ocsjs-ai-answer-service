@@ -265,11 +265,23 @@ def _runtime_initialize():
         client, cache = candidate_client, candidate_cache
         _cache_epoch += 1
         _runtime_init_error = None
+        close_unused_answer_stores(cache.store if cache is not None else None)
         if previous_client is not None and previous_client is not client:
             _retire_client(previous_client)
 
 
 _answer_stores = {}
+
+
+def close_unused_answer_stores(active=None):
+    """关闭不再使用的磁盘缓存连接：取消磁盘缓存或换了文件后，Windows 上旧文件才能删除。
+
+    仍持有旧缓存的在途请求只会读到“不可用”，自动退回内存缓存。
+    """
+    for key, store in list(_answer_stores.items()):
+        if store is not active:
+            store.close()
+            del _answer_stores[key]
 
 
 def _cache_namespace():
@@ -484,6 +496,8 @@ def _auth_failure_message():
 def create_browser_session():
     if not _browser_request_is_local_origin(request):
         return _error_response('仅允许当前网页建立浏览器会话', 403, 'cross_site')
+    # 先在锁外读完请求体（结果由 Flask 缓存）：慢速发送的请求体不会卡住其它要拿全局锁的请求。
+    _legacy_access_token(request)
     with _runtime_lock:
         if not verify_access_token(request):
             return _error_response(_auth_failure_message(), 403, 'invalid_token')
@@ -636,9 +650,12 @@ def _extract_text_from_response(response):
     遍历所有 content block，返回第一个 TextBlock 的文本。
     兼容 DeepSeek Anthropic 层可能返回非标准 block 结构的情况。
     """
+    content = getattr(response, 'content', None)
+    if isinstance(response, (str, bytes)) or not isinstance(content, (list, tuple)):
+        # anthropic SDK 收到 200 的非 JSON 正文（如 HTML 错误页）时直接返回字符串：与另外两种协议一样报“无法解析”
+        raise ProviderResponseError(message='Provider returned an invalid response', request=None)
     require_final_state(getattr(response, 'stop_reason', None), ('end_turn', 'stop_sequence'))
     require_final_state(getattr(response, 'status', None), ('completed',))
-    content = response.content
     if not content:
         logger.warning("AI 响应 content 为空列表")
         return None
@@ -670,7 +687,7 @@ _FAIL_FAST_CATEGORIES = frozenset({
 
 
 def _classify_api_error(exc):
-    if isinstance(exc, ProviderResponseError):
+    if isinstance(exc, (ProviderResponseError, anthropic.APIResponseValidationError)):
         return 'invalid_response'
     if isinstance(exc, anthropic.APITimeoutError):
         return 'timeout'
@@ -742,7 +759,8 @@ def _call_ai(prompt: str, max_tokens=None):
         except IncompleteResponseError:
             metrics.record_ai_failure('incomplete')
             raise
-        except (anthropic.APIStatusError, anthropic.APITimeoutError, anthropic.APIConnectionError) as exc:
+        except (anthropic.APIStatusError, anthropic.APITimeoutError, anthropic.APIConnectionError,
+                anthropic.APIResponseValidationError) as exc:
             category = _classify_api_error(exc)
             metrics.record_ai_failure(category)
             logger.warning("API call failed (attempt=%s, type=%s, status=%s, category=%s)",
@@ -903,9 +921,13 @@ def _search(t_start):
             metrics.incr('uncertain_answers')
             return _error_response('AI 无法确定该题答案，建议换用其他题库或人工作答', 200, 'uncertain_answer')
 
+        pending_write = None
         with _runtime_lock:
             if request_cache is cache and request_cache is not None and request_cache_epoch == _cache_epoch:
-                request_cache.set(question, processed_answer, question_type, options)
+                pending_write = request_cache.set(question, processed_answer, question_type, options, defer_store=True)
+        if pending_write is not None:
+            # 磁盘写入放在全局锁外：U 盘慢或数据库被另一实例占用时，不拖住其它请求。
+            request_cache.persist(pending_write)
 
         current_time = datetime.now(timezone.utc)
         with _records_lock:
@@ -941,7 +963,7 @@ def _search(t_start):
         logger.error("API 请求超时")
         return _error_response('AI服务响应超时，请重试', 504, 'upstream_timeout')
 
-    except ProviderResponseError:
+    except (ProviderResponseError, anthropic.APIResponseValidationError):
         logger.error("API 返回了无法解析的响应")
         return _error_response('AI 服务返回了无法解析的响应，请检查接口地址与协议', 502, 'upstream_invalid_response')
 

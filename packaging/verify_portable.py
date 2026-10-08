@@ -38,6 +38,8 @@ REQUIRED_CHECKS = {
     'native_tk_interface', 'tk_runtime', 'http_thread_stopped',
     'browser_session_created', 'browser_session_revoked_after_token_change',
     'ocs_integration_schema', 'failed_configuration_is_transactional',
+    # 故障提示可读性（README 发布清单要求）：缺 Key、Key 错误、输出被截断、超时都要给出可读中文提示
+    'fault_missing_key_readable', 'fault_wrong_key_readable', 'fault_truncated_readable', 'fault_timeout_readable',
 }
 
 # This packaging hook only observes explicitly requested self-tests. It does not

@@ -41,9 +41,17 @@ function fixture(fetch) {
     assert.equal(request.url, '/api/session');
     assert.equal(request.options.method, 'POST');
     assert.equal(request.options.credentials, 'same-origin');
-    assert.equal(JSON.parse(request.options.body).token, 'SYNTHETIC_LOCAL_TOKEN');
+    // 令牌走 X-Access-Token 请求头，关闭旧写法（ALLOW_LEGACY_TOKEN_LOCATIONS=false）后仍能进入统计面板
+    assert.equal(request.options.headers['X-Access-Token'], 'SYNTHETIC_LOCAL_TOKEN');
+    assert.deepEqual(JSON.parse(request.options.body), {});
     assert.deepEqual(page.navigations, ['/dashboard']);
     assert.equal(page.timers.size, 0);
+
+    page = fixture(async (url, options) => { request = {url, options}; return {ok: true, json: async () => ({code: 1})}; });
+    page.nodes.get('access-token').value = '令牌-SYNTHETIC';
+    await page.click();
+    assert.equal(request.options.headers['X-Access-Token'], undefined, 'non-ASCII tokens cannot travel in a header');
+    assert.equal(JSON.parse(request.options.body).token, '令牌-SYNTHETIC');
 
     page = fixture(async () => ({ok: false, json: async () => ({code: 0, msg: '<invalid token>'})}));
     await page.click();

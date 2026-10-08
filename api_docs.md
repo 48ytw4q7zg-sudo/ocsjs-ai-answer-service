@@ -27,7 +27,7 @@ AI题库服务是一个基于 Anthropic 兼容协议（也支持 OpenAI Chat / R
 
 1. **`X-Access-Token: <token>` 请求头（推荐）**
 2. `Authorization: Bearer <token>`
-3. 兼容旧版：`?token=` / `?access_token=` 查询参数、表单字段或 JSON 字段 `token`（会进入代理日志/浏览器历史，不推荐；每次使用计入 `/api/stats` 的 `legacy_token_location`，`ALLOW_LEGACY_TOKEN_LOCATIONS=false` 可关闭，关闭后只接受请求头）
+3. 兼容旧版：`?token=` / `?access_token=` 查询参数、表单字段或 JSON 字段 `token`（会进入代理日志/浏览器历史，不推荐；每次使用计入 `/api/stats` 的 `legacy_token_location`，`ALLOW_LEGACY_TOKEN_LOCATIONS=false` 可关闭，关闭后只接受请求头，`/dashboard?token=` 也随之失效；首页「统计面板」用 `X-Access-Token` 请求头调用 `/api/session` 建立会话，不受影响，但令牌须为 ASCII 字符）
 
 浏览器：问答页通过 `POST /api/session` 用令牌换取 HttpOnly、`SameSite=Strict` 的会话 cookie（1 小时）；带 cookie 的写操作必须同时带 `Origin` 或 `Sec-Fetch-Site` 同源证据。
 `/dashboard?token=<token>` 首次访问会建立会话并 **303 跳转到不带令牌的 `/dashboard`**，令牌不再停留在地址栏；浏览器历史/自动补全仍可能记下首次输入的网址，推荐从首页输入令牌后进入仪表盘。会话过期后仪表盘返回 403 并提示重新输入令牌。

@@ -63,7 +63,7 @@ EduBrain 提供两类运行形态：
 | 新接口 | — | `/api/ready`（就绪探针）、`/openapi.json`（OpenAPI 3 契约）；`/api/stats` 增加 `metrics`（QPS、延迟分位、缓存命中率、失败/重试率）与 `cache` 统计 | 无 |
 | 配置热重载 | `settings.json` 正在写入时会误回退到 `.env` | 文件暂不可读时重读一次，仍失败则保留当前配置并返回失败 | 无 |
 | DEBUG | 可与 `HOST=0.0.0.0` 同时启用 | `python app.py`/`start.bat` 拒绝在非回环地址开启 DEBUG | 无 |
-| 令牌写在网址/请求体 | 默认兼容 | 仍默认兼容；每次使用计入 `legacy_token_location` 指标并告警一次；`ALLOW_LEGACY_TOKEN_LOCATIONS=false` 后只接受请求头 | OCS 配置改用 `headers` 后可关闭 |
+| 令牌写在网址/请求体 | 默认兼容 | 仍默认兼容；每次使用计入 `legacy_token_location` 指标并告警一次；`ALLOW_LEGACY_TOKEN_LOCATIONS=false` 后只接受请求头（`/dashboard?token=` 随之失效；首页「统计面板」改用请求头建立会话，仍可进入，但令牌须为 ASCII 字符） | OCS 配置改用 `headers` 后可关闭 |
 | 错误类型 | 只在响应体 `error_code` | 响应头 `X-Error-Code` 同步给出，网关/监控不解析响应体也能按错误类型统计 | 无 |
 | 答案缓存 | 仅内存，键不含模型 | 缓存键包含“协议/模型/提示词版本”，换模型或升级提示词不会命中旧答案；可选 `CACHE_PERSIST_FILE`（便携版勾选“缓存保存到 data 文件夹”）写入 SQLite，只存题目哈希与答案、不存题目原文，磁盘出错自动退回内存 | 需要跨重启复用答案时开启 |
 | 依赖版本 | 只有版本范围 | `requirements-lock.txt` 记录已测试的具体版本；启动时 anthropic/httpx 超出已测试范围会告警 | 无 |
@@ -86,7 +86,7 @@ EduBrain 提供两类运行形态：
 ③ `packaging/verify_portable.py` 快照完整性通过；④ 便携版帮助文字“不读取本机 .env、cc-switch”与 `config.py` 中 `PORTABLE_MODE` 分支一致（`tests/test_hardening.py` 与自检 `host_environment_isolation` 覆盖）；
 ⑤ 依赖安全：`requirements-lock.txt` 记录已测试的具体版本；在打包环境执行 `.build\venv\Scripts\python.exe packaging\export_runtime_lock.py --check-osv` 查询 OSV 公开漏洞库。
 2026-09-27 的结果：cryptography 49.0.0 曾命中 CVE-2026-69247（PKCS#7 EnvelopedData 解密，本项目只用 AES-GCM 与 scrypt，不调用受影响的函数）；版本范围已放宽到 `<51`，并在独立的验证环境里用 cryptography 50.0.1 跑完全部测试和便携自检，锁定文件随之更新，OSV 复查 0 条命中。
-便携版打包环境（`.build\venv`）仍是 49.0.0，下次重新打包时再升级。
+便携版打包环境（`.build\venv`）已升级到 50.0.1，2026-09-27 起构建的便携包都带 50.0.1；已发布的 portable-20260913 仍带 49.0.0（本项目不调用受影响的函数）。
 
 ---
 

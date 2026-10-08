@@ -130,11 +130,17 @@
             try {
                 await Promise.race([
                     (async () => {
+                        // 令牌放在 X-Access-Token 请求头，关闭旧写法（ALLOW_LEGACY_TOKEN_LOCATIONS=false）后仍可用；
+                        // 只有请求头装不下的非 ASCII 令牌才退回请求体
+                        const token = accessInput.value || '';
+                        const headerSafe = /^[\x20-\x7e]*$/.test(token);
+                        const headers = {'Content-Type': 'application/json'};
+                        if (token && headerSafe) headers['X-Access-Token'] = token;
                         const response = await fetch('/api/session', {
                             method: 'POST', credentials: 'same-origin',
-                            headers: {'Content-Type': 'application/json'},
+                            headers,
                             signal: controller.signal,
-                            body: JSON.stringify({token: accessInput.value || undefined})
+                            body: JSON.stringify(token && !headerSafe ? {token} : {})
                         });
                         const data = await response.json();
                         if (!response.ok || data.code !== 1) throw new Error(data.msg || '无法建立浏览器会话');

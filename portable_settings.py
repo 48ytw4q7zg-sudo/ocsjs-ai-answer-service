@@ -140,10 +140,11 @@ class ProfileStore:
             return backup
         return value if value is not None else {'version': 1, 'preferences': {}}
 
-    def _backup_previous(self, keep_credentials):
+    def _backup_previous(self, keep_credentials, password=None):
         """覆盖前把上一份可读的配置留作 profile.json.bak。
 
-        本次不保存凭据（用户选择删除已保存的密钥）时，备份里的加密凭据也一并去掉，不留副本。
+        备份里的加密凭据只在能用本次密码解开时保留：本次不保存凭据（用户删除已保存的密钥），
+        或换了便携密码时都会去掉，以免旧密码泄露后还能从备份解出旧密钥。
         """
         backup = self.backup_path
         try:
@@ -151,21 +152,34 @@ class ProfileStore:
         except (ValueError, OSError):
             previous = None
         if previous is not None:
-            if not keep_credentials:
+            if not self._backup_may_keep(previous, keep_credentials, password):
                 previous.pop('encrypted_credentials', None)
             write_json_atomic(backup, previous)
             return
-        if keep_credentials or not backup.exists():
+        if not backup.exists():
             return
         try:
             stale = self._read_file(backup)
         except (ValueError, OSError):
             stale = None
         if stale is None:
-            backup.unlink(missing_ok=True)
-        elif 'encrypted_credentials' in stale:
+            if not keep_credentials:
+                backup.unlink(missing_ok=True)
+        elif not self._backup_may_keep(stale, keep_credentials, password):
             stale.pop('encrypted_credentials')
             write_json_atomic(backup, stale)
+
+    def _backup_may_keep(self, profile, keep_credentials, password):
+        encrypted = profile.get('encrypted_credentials')
+        if encrypted is None:
+            return True
+        if not keep_credentials:
+            return False
+        try:
+            self._decrypt(encrypted, password)
+        except ValueError:
+            return False
+        return True
 
     def load_preferences(self):
         return Preferences.from_mapping(self._read().get('preferences', {}))
@@ -195,7 +209,7 @@ class ProfileStore:
                 'nonce': base64.b64encode(nonce).decode('ascii'),
                 'data': base64.b64encode(encrypted).decode('ascii'),
             }
-        self._backup_previous(keep_credentials=bool(credentials))
+        self._backup_previous(keep_credentials=bool(credentials), password=password)
         write_json_atomic(self.path, result)
         self.recovered_from_backup = False
 
@@ -203,6 +217,9 @@ class ProfileStore:
         encrypted = self._read().get('encrypted_credentials')
         if encrypted is None:
             return {}
+        return self._decrypt(encrypted, password)
+
+    def _decrypt(self, encrypted, password):
         try:
             salt = base64.b64decode(encrypted['salt'], validate=True)
             nonce = base64.b64decode(encrypted['nonce'], validate=True)

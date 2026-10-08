@@ -1,6 +1,8 @@
 """Browser navigation auth checks in an isolated, credential-free process."""
 
 import importlib
+import io
+import json
 import logging
 from pathlib import Path
 import tempfile
@@ -56,6 +58,46 @@ class BrowserSessionTests(unittest.TestCase):
         self.assertNotIn(self.token, cookie)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertEqual(self.client.get("/dashboard").status_code, 200)
+
+    def test_session_accepts_header_token_when_legacy_locations_are_disabled(self):
+        with patch.object(self.module.Config, "ALLOW_LEGACY_TOKEN_LOCATIONS", False):
+            self.assertEqual(self.login().status_code, 403)
+            response = self.client.post("/api/session", json={}, headers={"X-Access-Token": self.token})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(self.client.get("/dashboard").status_code, 200)
+
+    def test_session_reads_the_request_body_before_taking_the_runtime_lock(self):
+        events = []
+
+        class Stream(io.BytesIO):
+            def read(self, *args):
+                events.append("read")
+                return super().read(*args)
+
+            def readinto(self, buffer):
+                events.append("read")
+                return super().readinto(buffer)
+
+            def readline(self, *args):
+                events.append("read")
+                return super().readline(*args)
+
+        class LockSpy:
+            def __enter__(self):
+                events.append("lock")
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        body = json.dumps({"token": self.token}).encode("utf-8")
+        with patch.object(self.module, "_runtime_lock", LockSpy()):
+            response = self.client.post("/api/session", input_stream=Stream(body),
+                                        content_type="application/json", content_length=len(body))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("lock", events)
+        # 慢速请求体只能拖住它自己：读请求体必须发生在拿全局锁之前
+        self.assertIn("read", events[:events.index("lock")])
 
     def test_wrong_token_cannot_create_session(self):
         response = self.client.post("/api/session", json={"token": "wrong"})
