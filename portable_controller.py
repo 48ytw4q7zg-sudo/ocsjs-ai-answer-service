@@ -15,8 +15,10 @@ from portable_settings import Preferences
 
 
 def _header_safe(token):
-    # HTTP 头只能可靠承载可见 ASCII；其它字符的口令退回请求体/查询参数传输。
-    return bool(token) and all(33 <= ord(char) <= 126 for char in token)
+    # HTTP 头只能可靠承载可打印 ASCII，且首尾空白会被去掉：首尾须为可见字符、中间允许空格；
+    # 其它口令退回请求体/查询参数传输。网页里用同一条规则 /^[!-~](?:[ -~]*[!-~])?$/。
+    return (bool(token) and 33 <= ord(token[0]) <= 126 and 33 <= ord(token[-1]) <= 126
+            and all(32 <= ord(char) <= 126 for char in token))
 
 
 class PortableController:
@@ -234,7 +236,7 @@ class PortableController:
             self.module.client = None
             stale_stores = self.module.detach_unused_answer_stores(None)
         # 退出时释放磁盘缓存文件句柄（在全局锁外关闭），用户随后可以直接删除 answer-cache.sqlite3。
-        self.module.close_answer_stores(stale_stores)
+        self.module.close_answer_stores(stale_stores, wait=True)
         if client is not None and hasattr(client, "close"):
             try:
                 client.close()

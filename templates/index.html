@@ -133,7 +133,7 @@
                         // 令牌放在 X-Access-Token 请求头，关闭旧写法（ALLOW_LEGACY_TOKEN_LOCATIONS=false）后仍可用；
                         // 只有请求头装不下的非 ASCII 令牌才退回请求体
                         const token = accessInput.value || '';
-                        const headerSafe = /^[!-~]+$/.test(token);
+                        const headerSafe = /^[!-~](?:[ -~]*[!-~])?$/.test(token);
                         const headers = {'Content-Type': 'application/json'};
                         if (token && headerSafe) headers['X-Access-Token'] = token;
                         const response = await fetch('/api/session', {
@@ -187,7 +187,7 @@
                 const token = accessInput.value || '';
                 const headers = {'Content-Type': 'application/json'};
                 const payload = {title: question, type: questionType || undefined, options: options || undefined};
-                if (token && /^[!-~]+$/.test(token)) headers['X-Access-Token'] = token;
+                if (token && /^[!-~](?:[ -~]*[!-~])?$/.test(token)) headers['X-Access-Token'] = token;
                 else if (token) payload.token = token;
                 const response = await fetch('/api/search', {
                     method: 'POST',

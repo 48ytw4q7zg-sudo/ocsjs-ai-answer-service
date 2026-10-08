@@ -269,7 +269,7 @@ def _runtime_initialize():
         stale_stores = detach_unused_answer_stores(cache.store if cache is not None else None)
         if previous_client is not None and previous_client is not client:
             _retire_client(previous_client)
-    # 关闭连接要等进行中的磁盘操作结束：放在全局锁外，慢速 U 盘不会拖住其它请求。
+    # 调用方大多还持有可重入的 _runtime_lock，所以关闭交给后台线程，慢速 U 盘不会拖住其它请求。
     close_answer_stores(stale_stores)
 
 
@@ -285,9 +285,23 @@ def detach_unused_answer_stores(active=None):
     return [_answer_stores.pop(key) for key, store in list(_answer_stores.items()) if store is not active]
 
 
-def close_answer_stores(stores):
+def close_answer_stores(stores, wait=False):
+    """关闭从登记表摘下的磁盘缓存连接。
+
+    关闭要等进行中的磁盘操作结束；重建运行时的调用方往往还持有可重入的 _runtime_lock，
+    所以默认放到后台线程里关。退出时（已在锁外）用 wait=True 同步关闭，保证文件句柄确实释放。
+    """
+    stores = list(stores or ())
     for store in stores:
-        store.close()
+        store.available = False  # 在途请求立即退回内存缓存
+    if not stores:
+        return
+    if wait:
+        for store in stores:
+            store.close()
+        return
+    threading.Thread(target=lambda: [store.close() for store in stores],
+                     name='answer-store-close', daemon=True).start()
 
 
 def _cache_namespace():
@@ -1120,8 +1134,9 @@ def clear_cache():
         active_cache = cache
         if active_cache is None:
             return jsonify({'success': False, 'message': '缓存未启用', 'error_code': 'cache_disabled'}), 409
-        count = active_cache.clear()
         _cache_epoch += 1
+    # 删库可能要等磁盘锁：放在全局锁外。epoch 已先递增，清空前已在计算的答案不会再写回缓存。
+    count = active_cache.clear()
     _audit('清空缓存', True, count=count)
     return jsonify({'success': True, 'message': f'缓存已清除 ({count}条)', 'count': count})
 

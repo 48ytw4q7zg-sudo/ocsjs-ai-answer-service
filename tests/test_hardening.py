@@ -408,10 +408,47 @@ class ServiceHardeningTests(unittest.TestCase):
                     service._runtime_initialize()
                 self.assertIsNone(service.cache.store)
                 self.assertFalse(first.available, 'turning the disk cache off must release the SQLite file')
+                for worker in [t for t in threading.enumerate() if t.name == 'answer-store-close']:
+                    worker.join(5)
                 path.unlink()  # Windows 上句柄释放后才能删除
             finally:
                 service.Config.CACHE_PERSIST_FILE = original
-                service.close_answer_stores(service.detach_unused_answer_stores(None))
+                service.close_answer_stores(service.detach_unused_answer_stores(None), wait=True)
+
+    def test_runtime_rebuild_never_waits_for_a_busy_disk_store(self):
+        # 生产调用方都在持有可重入的 _runtime_lock 时重建运行时：关闭旧连接不能在锁内等慢速磁盘
+        original = service.Config.CACHE_PERSIST_FILE
+        with tempfile.TemporaryDirectory() as folder:
+            service.Config.CACHE_PERSIST_FILE = str(Path(folder) / 'cache.sqlite3')
+            held, release = threading.Event(), threading.Event()
+            holder = None
+            try:
+                with patch.object(service, 'build_ai_client', return_value=RecordingClient()):
+                    service._runtime_initialize()
+                busy = service.cache.store
+
+                def hold():
+                    with busy._lock:
+                        held.set()
+                        release.wait(5)
+
+                holder = threading.Thread(target=hold)
+                holder.start()
+                self.assertTrue(held.wait(5))
+                service.Config.CACHE_PERSIST_FILE = ''
+                started = time.monotonic()
+                with service._runtime_lock, patch.object(service, 'build_ai_client', return_value=RecordingClient()):
+                    service._runtime_initialize()
+                self.assertLess(time.monotonic() - started, 2.0)
+                self.assertFalse(busy.available)
+            finally:
+                release.set()
+                if holder is not None:
+                    holder.join(5)
+                for worker in [t for t in threading.enumerate() if t.name == 'answer-store-close']:
+                    worker.join(5)
+                service.Config.CACHE_PERSIST_FILE = original
+                service.close_answer_stores(service.detach_unused_answer_stores(None), wait=True)
 
     def test_invalid_disk_cache_path_falls_back_to_memory(self):
         # 含空字符的路径在 sqlite 打开时才失败：只告警并退回内存缓存，运行时照常可用。
@@ -634,6 +671,14 @@ class ConfigurationHelpersTests(unittest.TestCase):
                        password='synthetic-new-password')
             self.assertIn('encrypted_credentials', json.loads(store.backup_path.read_text(encoding='utf-8')))
 
+    def test_header_safe_tokens_allow_inner_spaces_only(self):
+        # 与网页 /^[!-~](?:[ -~]*[!-~])?$/ 同一条规则：首尾可见 ASCII，中间可以有空格
+        safe = portable_controller._header_safe
+        self.assertTrue(safe('correct horse battery'))
+        self.assertTrue(safe('A'))
+        for token in ('', ' leading', 'trailing ', '令牌', 'tab\tinside'):
+            self.assertFalse(safe(token), repr(token))
+
     def test_healthcheck_import_does_not_load_the_provider_sdk(self):
         # Docker 每 30 秒跑一次健康检查：导入它不应把 anthropic/httpx/pydantic 整套加载进来
         import subprocess
@@ -834,6 +879,24 @@ class UtilityTests(unittest.TestCase):
                 with patch.object(store, 'get', get_then_clear):
                     self.assertIsNone(reader.get('q3'))
                 self.assertEqual(len(reader.cache), 0)
+                # 清空进行到“已清内存、还没删库”时读盘回填：删库后必须再次作废
+                cache.set('q4', 'D')
+                cache.cache.clear()
+                real_clear = store.clear
+
+                def clear_after_a_refill():
+                    self.assertEqual(cache.get('q4'), 'D')
+                    return real_clear()
+
+                with patch.object(store, 'clear', clear_after_a_refill):
+                    cache.clear()
+                self.assertIsNone(cache.get('q4'))
+                # 运行时重建后新旧实例共用磁盘库：新实例清空后，旧实例延后的写入也不能落盘
+                old, new = SimpleCache(600, store=store), SimpleCache(600, store=store)
+                record = old.set('q5', 'E', defer_store=True)
+                new.clear()
+                old.persist(record)
+                self.assertEqual(store.count(), 0)
             finally:
                 store.close()
 

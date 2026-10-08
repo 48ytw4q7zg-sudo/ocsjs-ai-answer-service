@@ -127,7 +127,8 @@ class SimpleCache:
                     self._evict_one()
                 created = now
             self.cache[key] = (now, answer, created, now)
-            record = (key, answer, created, now, self._generation) if self.store is not None else None
+            record = ((key, answer, created, now, self._generation, self.store.generation)
+                      if self.store is not None else None)
         if defer_store:
             return record
         self.persist(record)
@@ -135,10 +136,12 @@ class SimpleCache:
 
     def persist(self, record) -> None:
         if record is not None and self.store is not None:
-            key, answer, created, now, generation = record
-            # 代数在 SQLite 锁内比对：写入与 clear() 的删库串行，清空之后才到的写入直接丢弃
-            self.store.put(key, answer, created, now, self.expiration, self.max_size,
-                           guard=lambda: generation == self._generation)
+            key, answer, created, now, generation, store_generation = record
+            # 代数在 SQLite 锁内比对：写入与删库串行，清空之后才到的写入直接丢弃。
+            # 磁盘库的代数同时覆盖共用同一个库的其它缓存实例（运行时重建前后的新旧实例）。
+            store = self.store
+            store.put(key, answer, created, now, self.expiration, self.max_size,
+                      guard=lambda: generation == self._generation and store_generation == store.generation)
 
     def clear(self) -> int:
         with self._lock:
@@ -147,6 +150,10 @@ class SimpleCache:
             self.cache.clear()
         if self.store is not None:
             count = max(count, self.store.clear())
+            with self._lock:
+                # 删库之前读盘并回填的旧答案也作废：删库后再清一次内存，并让还没回填的读盘失效
+                self._generation += 1
+                self.cache.clear()
         return count
 
     def remove_expired(self) -> int:
@@ -188,6 +195,8 @@ class PersistentAnswerStore:
         self.path = str(path)
         self.available = True
         self._lock = threading.Lock()
+        # 每次清空加一（在 SQLite 锁内）：写入前比对，共用这个库的所有缓存实例在清空之后都不会再写旧答案
+        self.generation = 0
         self._writes = 0
         self._connection = None
         try:
@@ -252,7 +261,10 @@ class PersistentAnswerStore:
         self._run(lambda db: db.execute("UPDATE answers SET accessed = ? WHERE key = ?", (now, key)))
 
     def clear(self) -> int:
-        return self._run(lambda db: db.execute("DELETE FROM answers").rowcount, 0)
+        def operation(db):
+            self.generation += 1
+            return db.execute("DELETE FROM answers").rowcount
+        return self._run(operation, 0)
 
     def count(self) -> int:
         return self._run(lambda db: db.execute("SELECT COUNT(*) FROM answers").fetchone()[0], 0)

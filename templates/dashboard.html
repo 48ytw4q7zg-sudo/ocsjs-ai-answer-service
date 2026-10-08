@@ -208,7 +208,7 @@
             if ((finalOptions.method || 'GET').toUpperCase() === 'POST') {
                 finalOptions.headers['Content-Type'] = 'application/json';
                 finalOptions.body = JSON.stringify({...JSON.parse(finalOptions.body || '{}'), token: accessToken});
-            } else if (/^[\x00-\x7F]*$/.test(accessToken)) {
+            } else if (/^[!-~](?:[ -~]*[!-~])?$/.test(accessToken)) {
                 finalOptions.headers['X-Access-Token'] = accessToken;
             } else {
                 const target = new URL(url, window.location.origin);

@@ -53,6 +53,12 @@ function fixture(fetch) {
     assert.equal(request.options.headers['X-Access-Token'], undefined, 'non-ASCII tokens cannot travel in a header');
     assert.equal(JSON.parse(request.options.body).token, '令牌-SYNTHETIC');
 
+    page = fixture(async (url, options) => { request = {url, options}; return {ok: true, json: async () => ({code: 1})}; });
+    page.nodes.get('access-token').value = 'correct horse battery';
+    await page.click();
+    assert.equal(request.options.headers['X-Access-Token'], 'correct horse battery', 'inner spaces still fit in a header');
+    assert.deepEqual(JSON.parse(request.options.body), {});
+
     page = fixture(async () => ({ok: false, json: async () => ({code: 0, msg: '<invalid token>'})}));
     await page.click();
     assert.equal(page.navigations.length, 0);
